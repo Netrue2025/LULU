@@ -1,0 +1,22 @@
+{
+  "provider": "elevenlabs",
+  "defaultVoice": "talia",
+  "fallback": "piper",
+  "cacheEnabled": false,
+  "cacheFolder": "cache/tts_cache",
+  "elevenlabsGainDb": 10,
+  "voices": {
+    "conversation": {
+      "voice_id": "OZ0L6eISlOejga3XjDFt",
+      "display_name": "Talia - Warm Soft Guide"
+    },
+    "story": {
+      "voice_id": "OZ0L6eISlOejga3XjDFt",
+      "display_name": "Talia - Warm Soft Guide"
+    },
+    "education": {
+      "voice_id": "OZ0L6eISlOejga3XjDFt",
+      "display_name": "Talia - Warm Soft Guide"
+    }
+  }
+}

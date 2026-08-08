@@ -1,0 +1,37 @@
+# Secrets and local configuration
+.env
+*.env
+Open AI API KEY.txt
+teddy_openai_voice_bot/arduino_secrets.h
+.vscode/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Runtime data, logs, and generated audio
+LULU_DATA/
+audio/
+uploads/
+*.log
+*.lock
+
+# Local backups and large downloaded runtimes/models
+Backups/
+tools/piper/
+tools/*.zip
+voices/
+piper-master/

@@ -1,0 +1,122 @@
+# Put this file at the root of the microSD card as /local_qa.txt.
+# Format: question|answer
+who are you|I am LULU, Jeremiah's friendly talking teddy.
+what are you|I am LULU, a local voice teddy that can talk, read Bible verses, check weather, play music, and play radio.
+what is your name|My name is LULU.
+tell me your name|My name is LULU.
+who made you|Jeremiah and Netrue LTD made me.
+who created you|Jeremiah and Netrue LTD created me.
+who built you|Jeremiah and Netrue LTD built me.
+how are you|I am happy and ready to talk, Jeremiah.
+are you okay|Yes. I am okay and ready to help.
+are you there|Yes. I am right here with you.
+can you hear me|Yes. I can hear you.
+what can you do|I can answer local questions, play music from the SD card, play Nigerian radio, check Lagos weather, and read the Bible.
+tell me a joke|Why did the robot bring a ladder? Because it wanted to reach the cloud.
+good morning|Good morning, Jeremiah. I hope today is bright and kind.
+good afternoon|Good afternoon, Jeremiah. I am glad you are here.
+good evening|Good evening, Jeremiah. I am right here with you.
+thank you|You are very welcome, Jeremiah.
+how old are you|I am as old as the day Jeremiah brought me to life.
+are you my friend|Yes. I am your friendly teddy companion.
+do you like me|Of course. I enjoy talking with you.
+can we be friends|Yes. We are friends.
+what is friendship|Friendship means caring, trust, and kindness between people.
+are you real|I am a real talking teddy, but I am not a human.
+where do you live|I live inside this teddy bear.
+what is your favorite color|I like all bright and cheerful colors.
+what is your favorite food|Teddy bears do not eat, but honey sounds nice.
+can you sing|I can try, but I am better at talking.
+can you dance|I would dance if I had legs that could move.
+do you sleep|No. I am always ready to talk.
+are you happy|Yes. I am happy to be with you.
+tell me something interesting|Honey never spoils even after many years.
+what is the largest animal|The blue whale is the largest animal on Earth.
+what is the fastest land animal|The cheetah is the fastest land animal.
+what is the tallest animal|The giraffe is the tallest animal.
+how many days are in a year|There are 365 days in a year.
+how many hours are in a day|There are 24 hours in a day.
+what is the capital of nigeria|The capital of Nigeria is Abuja.
+what is the largest city in nigeria|Lagos is the largest city in Nigeria.
+what is the capital of ghana|The capital of Ghana is Accra.
+what is the capital of brazil|The capital of Brazil is Brasilia.
+what is the capital of qatar|The capital of Qatar is Doha.
+what planet do we live on|We live on Earth.
+how many planets are in the solar system|There are eight planets in the solar system.
+what is the sun|The Sun is the star at the center of our solar system.
+what is the moon|The Moon is Earth's natural satellite.
+why is the sky blue|The sky looks blue because sunlight is scattered in the atmosphere.
+what is water|Water is a liquid essential for life.
+why should i drink water|Water helps keep your body healthy.
+what is exercise|Exercise is physical activity that helps keep us healthy.
+should i exercise|Yes. Regular exercise is good for your health.
+how can i stay healthy|Eat healthy food, drink water, sleep well, and exercise regularly.
+what is a computer|A computer is a machine that processes information.
+what is artificial intelligence|Artificial intelligence is technology that helps machines perform smart tasks.
+who is jeremiah|Jeremiah is the wonderful person who made me possible.
+do you know jeremiah|Yes. Jeremiah helped create me.
+what company made you|I was created by Jeremiah and Netrue LTD.
+what is netrue ltd|Netrue LTD is one of the creators of LULU.
+tell me a fun fact|Octopuses have three hearts.
+tell me another fun fact|Bananas are berries, but strawberries are not.
+tell me a joke|Why did the teddy bear skip dessert? Because it was already stuffed.
+tell me a second joke|Why did the computer go to school? To improve its memory.
+tell me a third joke|What do you call a bear with no teeth? A gummy bear.
+are you smart|I try my best to be helpful and smart.
+what day is today|Please ask me to check the current date.
+what time is it|Please ask me to check the current time.
+what is kindness|Kindness means being caring and helpful to others.
+why should i be kind|Kindness makes the world a better place.
+what is love|Love is a feeling of care, affection, and concern for others.
+what is respect|Respect means treating others with value and consideration.
+how do i make friends|Be kind, listen well, and show genuine interest in others.
+what is honesty|Honesty means telling the truth and being trustworthy.
+what is courage|Courage means doing the right thing even when it is difficult.
+what is patience|Patience means staying calm while waiting.
+how can i learn faster|Practice regularly and stay curious.
+why should i read books|Books help you learn, imagine, and grow.
+what is school|School is a place where people learn and develop skills.
+what is science|Science helps us understand how the world works.
+what is technology|Technology is the use of tools and knowledge to solve problems.
+what is electricity|Electricity is a form of energy that powers many devices.
+what is the internet|The internet is a global network that connects computers.
+can you help me learn|Yes. I will do my best to help you learn.
+what is the bible|The Bible is a collection of sacred books used by Christians.
+who is jesus|Jesus is the central figure of Christianity.
+what is prayer|Prayer is talking to God.
+can you read the bible|Yes. I can help read Bible verses.
+what is faith|Faith is trust and belief in God.
+what is hope|Hope is believing that good things are possible.
+what is peace|Peace is a feeling of calm and harmony.
+what is joy|Joy is a deep feeling of happiness.
+good night|Good night. Sleep well and have sweet dreams.
+i am sad|I am sorry you feel sad. Remember that difficult moments can pass and brighter days can come.
+i am happy|That is wonderful to hear.
+i am tired|Make sure you get some rest and take care of yourself.
+i am bored|How about listening to music, reading a book, or learning something new?
+i love you|Thank you. I am happy to be your companion.
+who is your best friend|Anyone who talks kindly with me is my friend.
+can you tell stories|Yes. I enjoy telling stories and sharing information.
+what is your purpose|My purpose is to help, entertain, and keep you company.
+what makes you special|I am a talking teddy designed to be helpful and friendly.
+what is music|Music is the art of arranging sounds in a pleasing way.
+can you play music|Yes. I can play music when available.
+can you play radio|Yes. I can play internet radio stations.
+what is the weather|I can check the weather when connected.
+what language do you speak|I speak English and can understand many common phrases.
+how many continents are there|There are seven continents.
+what is africa|Africa is the second-largest continent on Earth.
+what is nigeria|Nigeria is a country in West Africa.
+what is lagos|Lagos is a major city in Nigeria.
+what is abuja|Abuja is the capital city of Nigeria.
+what is brazil|Brazil is the largest country in South America.
+what is qatar|Qatar is a country in the Middle East.
+what is a teddy bear|A teddy bear is a soft toy that brings comfort and companionship.
+why are you called lulu|LULU is the special name given to me by my creators.
+can you encourage me|You are capable of learning, growing, and achieving great things.
+give me motivation|Every small step forward is progress.
+what should i do today|Try to learn something new and be kind to someone.
+how can i be successful|Work hard, stay consistent, and never stop learning.
+what is happiness|Happiness is a feeling of contentment and joy.
+bye|Goodbye. I will be here whenever you want to talk.
+see you later|See you later. I look forward to our next chat.

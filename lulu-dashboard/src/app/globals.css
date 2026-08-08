@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 25% 98%;
+  --foreground: 222 34% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 34% 10%;
+  --muted: 214 24% 92%;
+  --muted-foreground: 222 12% 42%;
+  --accent: 174 55% 92%;
+  --accent-foreground: 184 80% 18%;
+  --primary: 184 79% 32%;
+  --primary-foreground: 0 0% 100%;
+  --destructive: 356 73% 46%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 218 20% 84%;
+  --input: 218 20% 84%;
+  --ring: 184 79% 32%;
+}
+
+.dark {
+  --background: 225 18% 9%;
+  --foreground: 210 28% 96%;
+  --card: 224 18% 13%;
+  --card-foreground: 210 28% 96%;
+  --muted: 222 16% 20%;
+  --muted-foreground: 218 13% 68%;
+  --accent: 178 38% 18%;
+  --accent-foreground: 174 85% 82%;
+  --primary: 176 72% 42%;
+  --primary-foreground: 222 34% 9%;
+  --destructive: 356 73% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 222 17% 24%;
+  --input: 222 17% 24%;
+  --ring: 176 72% 42%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+button,
+input,
+select,
+textarea {
+  letter-spacing: 0;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.25);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.35);
+  border-radius: 999px;
+}
