@@ -636,6 +636,24 @@ tts_manager = TTSManager(
 )
 
 
+def warm_piper_voice_model() -> None:
+    """Prepare the hosted Piper voice assets before the ESP32 sends its first request."""
+    preload = os.getenv("PIPER_PRELOAD_MODEL", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if not preload:
+        return
+
+    try:
+        logger.info("Preparing Piper voice model: %s", PIPER_VOICE_MODEL)
+        tts_manager.piper.ensure_voice_model()
+    except Exception:
+        logger.warning("Could not prepare Piper voice model at startup", exc_info=True)
+
+
 class _RemotePollingAccessLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -663,6 +681,7 @@ portuguese_tutor.ensure_portuguese_tutor_database()
 add_unique_file_handler(logging.getLogger(), storage.rotate_log("logs/server.log"), logging.INFO)
 add_unique_file_handler(logging.getLogger(), storage.rotate_log("logs/errors.log"), logging.ERROR)
 storage.start_backup_scheduler()
+warm_piper_voice_model()
 
 
 @dataclass(frozen=True)
