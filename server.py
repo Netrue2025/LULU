@@ -140,6 +140,7 @@ WEATHER_TIMEOUT_SECONDS = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "8"))
 ROOM_TEMP_HOT_C = float(os.getenv("ROOM_TEMP_HOT_C", "30"))
 ROOM_TEMP_COLD_C = float(os.getenv("ROOM_TEMP_COLD_C", "18"))
 BIBLE_API_BASE_URL = os.getenv("BIBLE_API_BASE_URL", "https://bible-api.com")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://lulu-production-8cfe.up.railway.app").rstrip("/")
 BIBLE_TRANSLATION = os.getenv("BIBLE_TRANSLATION", "kjv").lower()
 BIBLE_TIMEOUT_SECONDS = float(os.getenv("BIBLE_TIMEOUT_SECONDS", "20"))
 BIBLE_RETRIES = int(os.getenv("BIBLE_RETRIES", "3"))
@@ -825,6 +826,10 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 # from writing that file at the same time.
 reply_lock = threading.Lock()
 remote_command_lock = threading.Lock()
+
+
+def public_url(path: str) -> str:
+    return f"{PUBLIC_BASE_URL}/{path.lstrip('/')}"
 
 
 def save_upload(upload: UploadFile) -> Path:
@@ -3215,7 +3220,7 @@ def speak(request: Request, text: str, mode: str = "conversation") -> JSONRespon
         return JSONResponse(
             {
                 "text": speech_text,
-                "audio_url": str(request.url_for("audio", path="reply.wav")),
+                "audio_url": public_url("/audio/reply.wav"),
                 "action": "speak",
             }
         )
@@ -3246,7 +3251,7 @@ async def api_tts_speak(request: Request) -> JSONResponse:
                 "cache_hit": result.cache_hit,
                 "fallback_used": result.fallback_used,
                 "generation_seconds": result.generation_seconds,
-                "audio_url": str(request.url_for("audio", path="tts_api_response.wav")),
+                "audio_url": public_url("/audio/tts_api_response.wav"),
             }
         )
     except Exception as exc:
@@ -3354,7 +3359,7 @@ def chat(
                 if not wake_audio_ready and reply.speech_text:
                     synthesize_with_piper(reply.speech_text, REPLY_WAV_PATH)
 
-            audio_url = str(request.url_for("audio", path="wake_response.wav" if wake_audio_ready else "reply.wav"))
+            audio_url = public_url("/audio/wake_response.wav" if wake_audio_ready else "/audio/reply.wav")
         elif reply.action in {"speak", "story"} and reply.speech_text:
             with reply_lock:
                 if popular_audio_path:
@@ -3367,9 +3372,9 @@ def chat(
                     )
                     record_popular_response_candidate(transcription, reply, REPLY_WAV_PATH)
 
-            audio_url = str(request.url_for("audio", path="reply.wav"))
+            audio_url = public_url("/audio/reply.wav")
         elif reply.action == "radio":
-            audio_url = str(request.url_for("radio_pcm_stream"))
+            audio_url = public_url("/radio/nigeria.pcm")
 
         if reply.display_text:
             storage.append_conversation("lulu", reply.display_text)

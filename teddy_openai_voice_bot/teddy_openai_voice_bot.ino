@@ -491,6 +491,29 @@ bool isHttpUrl(const String &url)
   return url.startsWith("http://") || url.startsWith("https://");
 }
 
+String normalizeServerAudioUrl(const String &url, const char *fallbackPath)
+{
+  String cleanUrl = url;
+  cleanUrl.trim();
+  if (cleanUrl.length() == 0 ||
+      cleanUrl.indexOf("://0.0.0.0") >= 0 ||
+      cleanUrl.indexOf("://127.0.0.1") >= 0 ||
+      !isHttpUrl(cleanUrl))
+  {
+    return buildServerUrl(fallbackPath);
+  }
+
+  int hostIndex = cleanUrl.indexOf(CHAT_SERVER_HOST);
+  if (hostIndex >= 0)
+  {
+    int pathIndex = cleanUrl.indexOf('/', hostIndex + String(CHAT_SERVER_HOST).length());
+    if (pathIndex >= 0)
+      return buildServerUrl(cleanUrl.substring(pathIndex).c_str());
+  }
+
+  return cleanUrl;
+}
+
 void prepareChatClient(ChatNetworkClient &client, uint32_t timeoutMs)
 {
 #if CHAT_SERVER_USE_TLS
@@ -1628,18 +1651,10 @@ bool postWavToServer(const uint8_t *wav, size_t wavBytes, ChatServerReply *reply
   reply->action.trim();
   reply->musicQuery.trim();
 
-  bool badAudioUrl = reply->audioUrl.length() == 0 ||
-                     reply->audioUrl.indexOf("://0.0.0.0") >= 0 ||
-                     reply->audioUrl.indexOf("://127.0.0.1") >= 0 ||
-                     !isHttpUrl(reply->audioUrl);
-  if (badAudioUrl && reply->action == "speak")
-    reply->audioUrl = buildServerUrl(CHAT_AUDIO_PATH);
-  else if (badAudioUrl && (reply->action == "story" || reply->action == "wake"))
-    reply->audioUrl = buildServerUrl(CHAT_AUDIO_PATH);
-  else if (badAudioUrl && reply->action == "radio")
-  {
-    reply->audioUrl = buildServerUrl(RADIO_STREAM_PATH);
-  }
+  if (reply->action == "radio")
+    reply->audioUrl = normalizeServerAudioUrl(reply->audioUrl, RADIO_STREAM_PATH);
+  else
+    reply->audioUrl = normalizeServerAudioUrl(reply->audioUrl, CHAT_AUDIO_PATH);
 
   Serial.println("Audio URL: " + reply->audioUrl);
 
@@ -2170,13 +2185,7 @@ bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
 
   String audioUrl = doc["audio_url"] | "";
   audioUrl.trim();
-  if (audioUrl.length() == 0 ||
-      audioUrl.indexOf("://0.0.0.0") >= 0 ||
-      audioUrl.indexOf("://127.0.0.1") >= 0 ||
-      !isHttpUrl(audioUrl))
-  {
-    audioUrl = buildServerUrl(CHAT_AUDIO_PATH);
-  }
+  audioUrl = normalizeServerAudioUrl(audioUrl, CHAT_AUDIO_PATH);
 
   *audioUrlOut = audioUrl;
   return true;
