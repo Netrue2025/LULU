@@ -134,7 +134,7 @@ using ChatNetworkClient = WiFiClient;
 #define RADIO_STREAM_PATH "/radio/nigeria.pcm"
 #define REMOTE_COMMAND_PATH "/remote/next?device_id=esp32-lulu"
 #define REMOTE_STATUS_PATH "/remote/status"
-#define RADIO_STREAM_SAMPLE_RATE 22050
+#define RADIO_STREAM_SAMPLE_RATE 16000
 #define RADIO_STREAM_CHANNELS 1
 
 // Audio capture settings.
@@ -2513,7 +2513,9 @@ bool downloadAndPlayRawPcm(const String &audioUrl, const String &replyText)
       0xFFFFFFFF,
       true,
       false,
-      LED_RADIO);
+      LED_RADIO,
+      false,
+      true);
   http.end();
   client.stop();
 
