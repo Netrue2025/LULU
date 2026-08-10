@@ -35,7 +35,7 @@
 #define TOUCH_ACTIVE_LEVEL HIGH
 #endif
 #ifndef TOUCH_DEBUG_SERIAL
-#define TOUCH_DEBUG_SERIAL 1
+#define TOUCH_DEBUG_SERIAL 0
 #endif
 #ifndef SERIAL_BOOT_DELAY_MS
 #define SERIAL_BOOT_DELAY_MS 1200
@@ -98,6 +98,9 @@
 #endif
 #ifndef MAX_REPLY_RAM_WAV_BYTES
 #define MAX_REPLY_RAM_WAV_BYTES 786432
+#endif
+#ifndef MAX_REPLY_SD_WAV_BYTES
+#define MAX_REPLY_SD_WAV_BYTES 2097152
 #endif
 #ifndef I2S_WRITE_TIMEOUT_MS
 #define I2S_WRITE_TIMEOUT_MS 2000
@@ -194,6 +197,7 @@ using ChatNetworkClient = WiFiClient;
 #define SD_SCK 12
 #define SD_MISO 13
 #define LAST_RECORDING_PATH "/last_recording.wav"
+#define REPLY_DOWNLOAD_PATH "/reply_download.wav"
 #define LOCAL_QA_PATH "/local_qa.txt"
 #define MUSIC_DIR "/Music"
 #define STORY_DIR "/Stories"
@@ -1707,6 +1711,94 @@ bool skipStreamBytes(StreamType *stream, size_t length)
   return true;
 }
 
+bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *path)
+{
+  if (!sdReady)
+    return false;
+
+  if (contentLength > (int)MAX_REPLY_SD_WAV_BYTES)
+  {
+    lastServerError = "Reply WAV too large for SD cache";
+    return false;
+  }
+
+  SD.remove(path);
+  File output = SD.open(path, FILE_WRITE);
+  if (!output)
+  {
+    lastServerError = "Could not open reply SD cache";
+    return false;
+  }
+
+  uint8_t *buffer = (uint8_t *)allocPlaybackBytes(PLAYBACK_NET_BUFFER_BYTES, "reply sd download buffer");
+  if (!buffer)
+  {
+    output.close();
+    lastServerError = "No reply download buffer";
+    return false;
+  }
+
+  size_t total = 0;
+  unsigned long lastDataMs = millis();
+  while ((contentLength >= 0 && total < (size_t)contentLength) ||
+         (contentLength < 0 && (stream->connected() || stream->available() > 0)))
+  {
+    updateStatusLeds();
+    int available = stream->available();
+    if (available > 0)
+    {
+      size_t want = min((size_t)available, (size_t)PLAYBACK_NET_BUFFER_BYTES);
+      if (contentLength >= 0)
+        want = min(want, (size_t)contentLength - total);
+
+      int readNow = stream->read(buffer, want);
+      if (readNow > 0)
+      {
+        size_t written = output.write(buffer, (size_t)readNow);
+        if (written != (size_t)readNow)
+        {
+          free(buffer);
+          output.close();
+          lastServerError = "Reply SD write failed";
+          return false;
+        }
+
+        total += (size_t)readNow;
+        lastDataMs = millis();
+        if (total > MAX_REPLY_SD_WAV_BYTES)
+        {
+          free(buffer);
+          output.close();
+          lastServerError = "Reply WAV too large for SD cache";
+          return false;
+        }
+      }
+    }
+    else
+    {
+      if (millis() - lastDataMs > AUDIO_READ_TIMEOUT_MS)
+      {
+        free(buffer);
+        output.close();
+        lastServerError = "Reply SD download timeout";
+        return false;
+      }
+      delay(1);
+    }
+  }
+
+  free(buffer);
+  output.close();
+  if (total < 44)
+  {
+    lastServerError = "Reply WAV download too small";
+    return false;
+  }
+
+  Serial.printf("[AUDIO] Saved reply WAV to SD: %lu bytes\n", (unsigned long)total);
+  return true;
+}
+
 template <typename StreamType>
 bool parseWavHeader(StreamType *stream, uint16_t *channels, uint32_t *sampleRate, uint16_t *bitsPerSample, uint32_t *dataBytes)
 {
@@ -1983,6 +2075,45 @@ bool playPcmFromStream(StreamType *stream,
   return ok;
 }
 
+bool playReplyWavFromSD(const char *path, const String &replyText, bool animateFace)
+{
+  File file = SD.open(path, FILE_READ);
+  if (!file)
+  {
+    lastServerError = "Could not open reply WAV from SD";
+    return false;
+  }
+
+  uint16_t channels = 0;
+  uint16_t bitsPerSample = 0;
+  uint32_t sampleRate = 0;
+  uint32_t dataBytes = 0;
+
+  audioStep(4, "SD WAV HEADER");
+  if (!parseWavHeader(&file, &channels, &sampleRate, &bitsPerSample, &dataBytes))
+  {
+    file.close();
+    lastServerError = "Unsupported SD reply WAV";
+    showText("WAV error", "Need 16-bit PCM");
+    return false;
+  }
+
+  Serial.printf("Playing SD reply WAV: %lu Hz, %u ch, %u bits, %lu bytes\n",
+                (unsigned long)sampleRate,
+                channels,
+                bitsPerSample,
+                (unsigned long)dataBytes);
+  audioStatus("sd wav parsed");
+  if (animateFace && SPEAKING_FACE_ENABLED)
+    showSpeakingFace(true);
+  else
+    showWrapped("Speaking...", replyText);
+
+  bool played = playPcmFromStream(&file, channels, sampleRate, dataBytes, false, animateFace, LED_SPEAKING, false, true);
+  file.close();
+  return played;
+}
+
 bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool liveStream = false, bool animateFace = false)
 {
   lastPlaybackStoppedByButton = false;
@@ -2025,6 +2156,35 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
   WiFiClient *stream = http.getStreamPtr();
 
   int contentLength = http.getSize();
+  Serial.printf("[AUDIO] contentLength=%d sdReady=%d liveStream=%d\n", contentLength, sdReady ? 1 : 0, liveStream ? 1 : 0);
+  if (!liveStream && sdReady)
+  {
+    audioStep(4, "SD DOWNLOAD");
+    bool downloaded = downloadHttpStreamToSD(stream, contentLength, REPLY_DOWNLOAD_PATH);
+    http.end();
+    client.stop();
+    if (!downloaded)
+    {
+      setErrorState();
+      showWrapped("Audio download failed", lastServerError);
+      return false;
+    }
+
+    bool playedFromSd = playReplyWavFromSD(REPLY_DOWNLOAD_PATH, replyText, animateFace);
+    if (lastPlaybackStoppedByButton)
+    {
+      showText("Stopped", "Release TALK");
+      return true;
+    }
+    if (!playedFromSd)
+    {
+      setErrorState();
+      showWrapped("Audio failed", lastServerError);
+      return false;
+    }
+    return true;
+  }
+
   if (!liveStream && contentLength > 44 && contentLength <= MAX_REPLY_RAM_WAV_BYTES)
   {
     uint8_t *audioBuffer = (uint8_t *)allocPlaybackBytes((size_t)contentLength, "reply wav ram buffer");
@@ -2069,7 +2229,7 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
       else
         showWrapped("Speaking...", replyText);
 
-      bool played = playPcmFromStream(&memoryStream, memoryChannels, memorySampleRate, memoryDataBytes, false, animateFace);
+      bool played = playPcmFromStream(&memoryStream, memoryChannels, memorySampleRate, memoryDataBytes, false, animateFace, LED_SPEAKING, false, true);
       free(audioBuffer);
 
       if (lastPlaybackStoppedByButton)
@@ -2117,7 +2277,7 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
     showSpeakingFace(true);
   else
     showWrapped("Speaking...", replyText);
-  bool played = playPcmFromStream(stream, channels, sampleRate, dataBytes, liveStream, animateFace);
+  bool played = playPcmFromStream(stream, channels, sampleRate, dataBytes, liveStream, animateFace, LED_SPEAKING, liveStream, true);
   http.end();
   client.stop();
 
