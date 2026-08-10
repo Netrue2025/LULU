@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-
-const LULU_BASE_URL = process.env.LULU_API_BASE_URL ?? "http://127.0.0.1:8000";
+import { LULU_API_BASE_URL } from "@/lib/lulu-api";
 
 async function forwardJson(path: string, init?: RequestInit) {
-  const response = await fetch(`${LULU_BASE_URL}${path}`, {
+  const response = await fetch(`${LULU_API_BASE_URL}${path}`, {
     ...init,
     cache: "no-store",
     headers: {
@@ -43,7 +42,7 @@ export async function POST(request: Request) {
   if (contentType.includes("multipart/form-data")) {
     try {
       const formData = await request.formData();
-      const response = await fetch(`${LULU_BASE_URL}/database/upload-file`, {
+      const response = await fetch(`${LULU_API_BASE_URL}/database/upload-file`, {
         method: "POST",
         body: formData,
         cache: "no-store"

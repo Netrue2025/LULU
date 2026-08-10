@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <limits.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -99,12 +100,22 @@
 #define SPK_I2S_LRC 9
 #define SPK_I2S_DOUT 14
 
-// Python server. Override CHAT_SERVER_HOST in arduino_secrets.h with your computer IP.
+// Python/FastAPI server. Use CHAT_SERVER_USE_TLS=1 for hosted HTTPS backends.
 #ifndef CHAT_SERVER_HOST
 #define CHAT_SERVER_HOST "192.168.1.100"
 #endif
 #ifndef CHAT_SERVER_PORT
 #define CHAT_SERVER_PORT 8000
+#endif
+#ifndef CHAT_SERVER_USE_TLS
+#define CHAT_SERVER_USE_TLS 0
+#endif
+#if CHAT_SERVER_USE_TLS
+#define CHAT_SERVER_SCHEME "https"
+using ChatNetworkClient = WiFiClientSecure;
+#else
+#define CHAT_SERVER_SCHEME "http"
+using ChatNetworkClient = WiFiClient;
 #endif
 #define CHAT_SERVER_PATH "/chat"
 #define CHAT_AUDIO_PATH "/audio/reply.wav"
@@ -444,7 +455,20 @@ bool playbackTouchStopRequested(bool allowButtonStop,
 
 String buildServerUrl(const char *path)
 {
-  return "http://" + String(CHAT_SERVER_HOST) + ":" + String(CHAT_SERVER_PORT) + String(path);
+  return String(CHAT_SERVER_SCHEME) + "://" + String(CHAT_SERVER_HOST) + ":" + String(CHAT_SERVER_PORT) + String(path);
+}
+
+bool isHttpUrl(const String &url)
+{
+  return url.startsWith("http://") || url.startsWith("https://");
+}
+
+void prepareChatClient(ChatNetworkClient &client, uint32_t timeoutMs)
+{
+#if CHAT_SERVER_USE_TLS
+  client.setInsecure();
+#endif
+  client.setTimeout(timeoutMs);
 }
 
 class MemoryReadStream : public Stream
@@ -1437,12 +1461,12 @@ String readHttpBody(WiFiClient &client, int *statusCodeOut)
   return body;
 }
 
-bool connectChatServer(WiFiClient &client)
+bool connectChatServer(ChatNetworkClient &client)
 {
   if (!ensureWiFiReady())
     return false;
 
-  client.setTimeout(SERVER_READ_TIMEOUT_MS);
+  prepareChatClient(client, SERVER_READ_TIMEOUT_MS);
 
   for (uint8_t attempt = 1; attempt <= SERVER_CONNECT_RETRIES; attempt++)
   {
@@ -1472,7 +1496,7 @@ bool postWavToServer(const uint8_t *wav, size_t wavBytes, ChatServerReply *reply
   reply->action = "";
   reply->musicQuery = "";
 
-  WiFiClient client;
+  ChatNetworkClient client;
   if (!connectChatServer(client))
     return false;
 
@@ -1579,7 +1603,7 @@ bool postWavToServer(const uint8_t *wav, size_t wavBytes, ChatServerReply *reply
   bool badAudioUrl = reply->audioUrl.length() == 0 ||
                      reply->audioUrl.indexOf("://0.0.0.0") >= 0 ||
                      reply->audioUrl.indexOf("://127.0.0.1") >= 0 ||
-                     !reply->audioUrl.startsWith("http://");
+                     !isHttpUrl(reply->audioUrl);
   if (badAudioUrl && reply->action == "speak")
     reply->audioUrl = buildServerUrl(CHAT_AUDIO_PATH);
   else if (badAudioUrl && (reply->action == "story" || reply->action == "wake"))
@@ -1926,8 +1950,8 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
     return false;
 
   HTTPClient http;
-  WiFiClient client;
-  client.setTimeout(AUDIO_READ_TIMEOUT_MS);
+  ChatNetworkClient client;
+  prepareChatClient(client, AUDIO_READ_TIMEOUT_MS);
 
   showText("Speaking...", "Downloading");
   if (!http.begin(client, audioUrl))
@@ -2079,7 +2103,8 @@ bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
     return false;
 
   HTTPClient http;
-  WiFiClient client;
+  ChatNetworkClient client;
+  prepareChatClient(client, SERVER_READ_TIMEOUT_MS);
   String url = buildServerUrl("/speak?text=") + urlEncode(speechText);
 
   showText("Preparing voice");
@@ -2120,7 +2145,7 @@ bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
   if (audioUrl.length() == 0 ||
       audioUrl.indexOf("://0.0.0.0") >= 0 ||
       audioUrl.indexOf("://127.0.0.1") >= 0 ||
-      !audioUrl.startsWith("http://"))
+      !isHttpUrl(audioUrl))
   {
     audioUrl = buildServerUrl(CHAT_AUDIO_PATH);
   }
@@ -2242,8 +2267,8 @@ bool downloadAndPlayRawPcm(const String &audioUrl, const String &replyText)
     return false;
 
   HTTPClient http;
-  WiFiClient client;
-  client.setTimeout(AUDIO_READ_TIMEOUT_MS);
+  ChatNetworkClient client;
+  prepareChatClient(client, AUDIO_READ_TIMEOUT_MS);
 
   showText("Radio...", "Connecting");
   if (!http.begin(client, audioUrl))
@@ -2314,7 +2339,8 @@ bool fetchRemoteCommand(RemoteCommand *command, uint32_t timeoutMs = REMOTE_CONT
     return false;
 
   HTTPClient http;
-  WiFiClient client;
+  ChatNetworkClient client;
+  prepareChatClient(client, timeoutMs);
   String url = buildServerUrl(REMOTE_COMMAND_PATH);
 
   if (!http.begin(client, url))
@@ -2370,7 +2396,8 @@ bool checkRemoteStopRequested()
     return false;
 
   HTTPClient http;
-  WiFiClient client;
+  ChatNetworkClient client;
+  prepareChatClient(client, REMOTE_STOP_READ_TIMEOUT_MS);
   String url = buildServerUrl(REMOTE_STATUS_PATH);
 
   if (!http.begin(client, url))
@@ -3517,7 +3544,7 @@ void setup()
   updateRoomClimate(true);
 
   recordButtonArmed = !isRecordButtonPressed();
-  Serial.printf("Chat server: http://%s:%u%s\n", CHAT_SERVER_HOST, CHAT_SERVER_PORT, CHAT_SERVER_PATH);
+  Serial.printf("Chat server: %s://%s:%u%s\n", CHAT_SERVER_SCHEME, CHAT_SERVER_HOST, CHAT_SERVER_PORT, CHAT_SERVER_PATH);
 
   if (recordButtonArmed)
   {

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import os from "node:os";
 import fs from "node:fs/promises";
+import { LULU_API_BASE_URL } from "@/lib/lulu-api";
 
-const LULU_BASE_URL = process.env.LULU_API_BASE_URL ?? "http://127.0.0.1:8000";
 const startedAt = Date.now();
 
 async function getDiskUsage() {
@@ -30,7 +30,7 @@ export async function GET() {
   let serverOnline = false;
 
   try {
-    const response = await fetch(`${LULU_BASE_URL}/health`, {
+    const response = await fetch(`${LULU_API_BASE_URL}/health`, {
       cache: "no-store",
       signal: controller.signal
     });
@@ -63,7 +63,7 @@ export async function GET() {
       disk_total: disk.total,
       active_connections: serverOnline ? 1 : 0
     },
-    source: LULU_BASE_URL,
+    source: LULU_API_BASE_URL,
     checked_at: new Date().toISOString()
   });
 }

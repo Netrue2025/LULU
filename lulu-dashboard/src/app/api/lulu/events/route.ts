@@ -1,5 +1,6 @@
+import { LULU_API_BASE_URL } from "@/lib/lulu-api";
+
 const encoder = new TextEncoder();
-const LULU_BASE_URL = process.env.LULU_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +42,7 @@ async function getHealthSnapshot() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
-    const response = await fetch(`${LULU_BASE_URL}/health`, {
+    const response = await fetch(`${LULU_API_BASE_URL}/health`, {
       cache: "no-store",
       signal: controller.signal
     });

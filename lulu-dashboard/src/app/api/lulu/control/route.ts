@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const LULU_BASE_URL = process.env.LULU_API_BASE_URL ?? "http://127.0.0.1:8000";
+import { LULU_API_BASE_URL } from "@/lib/lulu-api";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -19,7 +18,7 @@ export async function POST(request: Request) {
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
-    const response = await fetch(`${LULU_BASE_URL}/remote/command`, {
+    const response = await fetch(`${LULU_API_BASE_URL}/remote/command`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, text }),
