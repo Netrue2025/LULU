@@ -34,6 +34,12 @@
 #ifndef TOUCH_ACTIVE_LEVEL
 #define TOUCH_ACTIVE_LEVEL HIGH
 #endif
+#ifndef TOUCH_DEBUG_SERIAL
+#define TOUCH_DEBUG_SERIAL 1
+#endif
+#ifndef SERIAL_BOOT_DELAY_MS
+#define SERIAL_BOOT_DELAY_MS 1200
+#endif
 #define RECORD_BUTTON_PIN TOUCH_INPUT_PIN
 
 // Touch confirmation beep. By default it plays through the existing audio output.
@@ -422,6 +428,28 @@ void waitWithStatusLeds(uint32_t durationMs)
 bool isTalkButtonPressedRaw()
 {
   return digitalRead(RECORD_BUTTON_PIN) == TOUCH_ACTIVE_LEVEL;
+}
+
+void logTouchDiagnostics(bool force = false)
+{
+#if TOUCH_DEBUG_SERIAL
+  static unsigned long lastTouchDebugMs = 0;
+  unsigned long now = millis();
+  if (!force && now - lastTouchDebugMs < 3000)
+    return;
+
+  lastTouchDebugMs = now;
+  Serial.printf(
+      "[TOUCH] gpio=%u raw=%d activeLevel=%d pressed=%d armed=%d wifi=%d heap=%lu psram=%lu\n",
+      (unsigned)RECORD_BUTTON_PIN,
+      digitalRead(RECORD_BUTTON_PIN),
+      (int)TOUCH_ACTIVE_LEVEL,
+      isTalkButtonPressedRaw() ? 1 : 0,
+      recordButtonArmed ? 1 : 0,
+      (int)WiFi.status(),
+      (unsigned long)ESP.getFreeHeap(),
+      (unsigned long)ESP.getFreePsram());
+#endif
 }
 
 bool playbackTouchStopRequested(bool allowButtonStop,
@@ -3518,6 +3546,9 @@ void enterDeepSleep()
 void setup()
 {
   Serial.begin(115200);
+  delay(SERIAL_BOOT_DELAY_MS);
+  Serial.println();
+  Serial.println("[BOOT] LULU firmware starting");
   Serial.printf("[BOOT] reset_reason=%d freeHeap=%lu freePsram=%lu psramSize=%lu stackHighWater=%lu\n",
                 (int)esp_reset_reason(),
                 (unsigned long)ESP.getFreeHeap(),
@@ -3525,6 +3556,7 @@ void setup()
                 (unsigned long)ESP.getPsramSize(),
                 (unsigned long)uxTaskGetStackHighWaterMark(NULL));
   pinMode(RECORD_BUTTON_PIN, TOUCH_ACTIVE_LEVEL == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP);
+  logTouchDiagnostics(true);
   pinMode(DHT_PIN, INPUT_PULLUP);
   LedManager.begin();
 
@@ -3545,6 +3577,7 @@ void setup()
 
   recordButtonArmed = !isRecordButtonPressed();
   Serial.printf("Chat server: %s://%s:%u%s\n", CHAT_SERVER_SCHEME, CHAT_SERVER_HOST, CHAT_SERVER_PORT, CHAT_SERVER_PATH);
+  logTouchDiagnostics(true);
 
   if (recordButtonArmed)
   {
@@ -3558,6 +3591,7 @@ void setup()
 void loop()
 {
   updateStatusLeds();
+  logTouchDiagnostics();
   handleSDFileManager();
   if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
   {
