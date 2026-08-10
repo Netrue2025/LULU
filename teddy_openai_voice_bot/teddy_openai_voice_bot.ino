@@ -90,6 +90,9 @@
 #ifndef SPEAKING_FACE_INTERVAL_MS
 #define SPEAKING_FACE_INTERVAL_MS 320
 #endif
+#ifndef AUDIO_DEBUG_SERIAL
+#define AUDIO_DEBUG_SERIAL 0
+#endif
 #ifndef PLAYBACK_NET_BUFFER_BYTES
 #define PLAYBACK_NET_BUFFER_BYTES 1024
 #endif
@@ -592,14 +595,22 @@ void printMemoryDiagnostics(const char *label)
 
 void audioStep(uint8_t step, const char *label)
 {
+#if AUDIO_DEBUG_SERIAL
   Serial.printf("[AUDIO] STEP %u %s\n", step, label);
   printMemoryDiagnostics(label);
+#else
+  Serial.printf("[AUDIO] STEP %u %s\n", step, label);
+#endif
 }
 
 void audioStatus(const char *label)
 {
+#if AUDIO_DEBUG_SERIAL
   Serial.printf("[AUDIO] %s\n", label);
   printMemoryDiagnostics(label);
+#else
+  Serial.printf("[AUDIO] %s\n", label);
+#endif
 }
 
 void *allocPlaybackBytes(size_t bytes, const char *label)
@@ -614,8 +625,10 @@ void *allocPlaybackBytes(size_t bytes, const char *label)
   if (!ptr)
     ptr = malloc(bytes);
 
+#if AUDIO_DEBUG_SERIAL
   Serial.printf("[AUDIO] alloc %s bytes=%lu ptr=%p\n", label, (unsigned long)bytes, ptr);
   printMemoryDiagnostics(label);
+#endif
   return ptr;
 }
 
@@ -2069,7 +2082,7 @@ bool playPcmFromStream(StreamType *stream,
   free(i2sOut);
 #endif
   free(chunk);
-  if (currentState == TeddyState::SPEAKING || playbackLedMode == LED_MUSIC || playbackLedMode == LED_RADIO)
+  if (currentState != TeddyState::CONNECTION_ERROR)
     setIdleState();
   audioStatus(ok ? "playback done" : "playback failed");
   return ok;
