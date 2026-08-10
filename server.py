@@ -62,7 +62,7 @@ _ensure_project_dependencies()
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from faster_whisper import WhisperModel
 from requests.adapters import HTTPAdapter
@@ -2806,6 +2806,38 @@ def health() -> dict[str, str]:
         "piper_noise_scale": PIPER_NOISE_SCALE,
         "piper_noise_w": PIPER_NOISE_W,
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LULU API</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f7f8fb; color: #111827; }
+    main { max-width: 720px; margin: 12vh auto; padding: 0 24px; }
+    section { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 28px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.06); }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { line-height: 1.6; color: #4b5563; }
+    a { color: #0f766e; font-weight: 600; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>LULU backend is running</h1>
+      <p>This Railway service is the FastAPI backend. The visual admin dashboard should be deployed from the <code>lulu-dashboard</code> folder as a separate Railway service.</p>
+      <p><a href="/health">Open health check</a> or <a href="/docs">open API docs</a>.</p>
+    </section>
+  </main>
+</body>
+</html>
+"""
 
 
 def safe_data_json_path(relative_path: str) -> Path:
