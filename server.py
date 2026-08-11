@@ -142,8 +142,9 @@ ROOM_TEMP_COLD_C = float(os.getenv("ROOM_TEMP_COLD_C", "18"))
 BIBLE_API_BASE_URL = os.getenv("BIBLE_API_BASE_URL", "https://bible-api.com")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://lulu-production-8cfe.up.railway.app").rstrip("/")
 BIBLE_TRANSLATION = os.getenv("BIBLE_TRANSLATION", "kjv").lower()
-BIBLE_TIMEOUT_SECONDS = float(os.getenv("BIBLE_TIMEOUT_SECONDS", "20"))
-BIBLE_RETRIES = int(os.getenv("BIBLE_RETRIES", "3"))
+BIBLE_TIMEOUT_SECONDS = float(os.getenv("BIBLE_TIMEOUT_SECONDS", "8"))
+BIBLE_RETRIES = int(os.getenv("BIBLE_RETRIES", "1"))
+BIBLE_MAX_SPOKEN_CHARS = int(os.getenv("BIBLE_MAX_SPOKEN_CHARS", "850"))
 RADIO_COUNTRY = os.getenv("RADIO_COUNTRY", "Nigeria")
 RADIO_COUNTRY_CODE = os.getenv("RADIO_COUNTRY_CODE", "NG")
 RADIO_CITY = os.getenv("RADIO_CITY", "Lagos")
@@ -773,6 +774,8 @@ def key_activity_description(transcription: str, reply: TeddyReply) -> str | Non
         return reply.display_text or "Playing music from SD card."
     if reply.action == "story":
         return reply.display_text or "Reading story."
+    if reply.action == "bible":
+        return reply.display_text or "Reading Bible."
     if reply.action in {"stop", "listen", "wake", "volume_up", "volume_down"}:
         return reply.display_text or f"Action: {reply.action}"
     if is_bible_question(transcription):
@@ -2169,6 +2172,81 @@ def format_bible_passage(data: dict) -> tuple[str, str]:
     return reference, f"{reference}, {translation}. {passage_text}"
 
 
+def split_spoken_text(text: str, max_chars: int = BIBLE_MAX_SPOKEN_CHARS) -> list[str]:
+    clean_text = clean_bible_text(text)
+    if not clean_text:
+        return []
+
+    chunks: list[str] = []
+    current = ""
+    for sentence in re.split(r"(?<=[.!?])\s+", clean_text):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) > max_chars:
+            words = sentence.split()
+            sentence = ""
+            for word in words:
+                candidate = f"{sentence} {word}".strip()
+                if len(candidate) > max_chars and sentence:
+                    chunks.append(sentence)
+                    sentence = word
+                else:
+                    sentence = candidate
+        candidate = f"{current} {sentence}".strip()
+        if len(candidate) > max_chars and current:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def save_bible_session(reference: str, chunks: list[str], next_index: int) -> None:
+    storage.save_json(
+        "dashboard/bible_session.json",
+        {
+            "reference": reference,
+            "translation": BIBLE_TRANSLATION.upper(),
+            "chunks": chunks,
+            "next_index": next_index,
+            "total_chunks": len(chunks),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+
+
+def is_bible_continue_request(text: str) -> bool:
+    normalized = (text or "").lower()
+    return bool(
+        re.search(r"\b(continue|more|next|keep reading|read more)\b", normalized)
+        and re.search(r"\b(bible|scripture|chapter|verse|passage|psalm|proverb)\b", normalized)
+    )
+
+
+def generate_bible_continue_reply() -> TeddyReply:
+    session = storage.load_json("dashboard/bible_session.json", {})
+    if not isinstance(session, dict):
+        session = {}
+    chunks = session.get("chunks")
+    next_index = int(session.get("next_index") or 0)
+    reference = str(session.get("reference") or "Bible passage")
+
+    if not isinstance(chunks, list) or next_index >= len(chunks):
+        text = "That Bible passage is finished. Tell me another book and chapter when you are ready."
+        return TeddyReply(speech_text=text, display_text=text, action="bible")
+
+    clean_chunks = [clean_bible_text(str(item)) for item in chunks if clean_bible_text(str(item))]
+    chunk = clean_chunks[next_index] if next_index < len(clean_chunks) else ""
+    next_index += 1
+    save_bible_session(reference, clean_chunks, next_index)
+    suffix = " Say continue Bible for the next part." if next_index < len(clean_chunks) else " That is the end of the passage."
+    display_text = f"Reading {reference}, part {next_index} of {len(clean_chunks)}."
+    return TeddyReply(speech_text=f"{chunk} {suffix}".strip(), display_text=display_text, action="bible")
+
+
 def generate_bible_reply(reference: str) -> TeddyReply:
     """Fetch a Bible chapter or verse and return full speech plus short display text."""
     if reference == BIBLE_RANDOM_REFERENCE:
@@ -2192,8 +2270,51 @@ def generate_bible_reply(reference: str) -> TeddyReply:
     if not clean_bible_text(speech_text):
         raise ValueError("Bible API returned an empty passage")
 
+    chunks = split_spoken_text(speech_text)
+    if not chunks:
+        raise ValueError("Bible API returned an empty passage")
+
+    save_bible_session(passage_reference, chunks, 1)
+    suffix = " Say continue Bible for the next part." if len(chunks) > 1 else ""
     display_text = f"Reading {passage_reference} ({BIBLE_TRANSLATION.upper()})."
-    return TeddyReply(speech_text=speech_text, display_text=display_text)
+    return TeddyReply(speech_text=f"{chunks[0]}{suffix}", display_text=display_text, action="bible")
+
+
+def read_bible_session_status() -> dict[str, Any]:
+    session = storage.load_json("dashboard/bible_session.json", {})
+    if not isinstance(session, dict):
+        return {"active": False}
+    chunks = session.get("chunks")
+    next_index = int(session.get("next_index") or 0)
+    total_chunks = len(chunks) if isinstance(chunks, list) else 0
+    return {
+        "active": total_chunks > 0 and next_index < total_chunks,
+        "reference": str(session.get("reference") or ""),
+        "translation": str(session.get("translation") or BIBLE_TRANSLATION.upper()),
+        "next_part": min(next_index + 1, total_chunks) if total_chunks else 0,
+        "total_parts": total_chunks,
+        "updated_at": str(session.get("updated_at") or ""),
+    }
+
+
+def read_remote_device_status() -> dict[str, Any] | None:
+    state = storage.load_json("dashboard/device_status.json", None)
+    return state if isinstance(state, dict) else None
+
+
+def save_remote_device_status(payload: dict[str, Any]) -> dict[str, Any]:
+    status = {
+        "device_id": str(payload.get("device_id") or "esp32-lulu")[:64],
+        "wifi_connected": bool(payload.get("wifi_connected")),
+        "wifi_ssid": str(payload.get("wifi_ssid") or "")[:64],
+        "wifi_ip": str(payload.get("wifi_ip") or "")[:48],
+        "wifi_rssi": int(payload.get("wifi_rssi") or 0),
+        "free_heap": int(payload.get("free_heap") or 0),
+        "state": str(payload.get("state") or "")[:48],
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    storage.save_json("dashboard/device_status.json", status)
+    return status
 
 
 def format_weather_number(value) -> str:
@@ -2650,6 +2771,9 @@ def generate_reply(
     if local_qa_reply:
         return remember(TeddyReply(speech_text=local_qa_reply, display_text=local_qa_reply))
 
+    if is_bible_continue_request(transcription):
+        return remember(generate_bible_continue_reply())
+
     bible_reference = extract_bible_reference(transcription)
     if bible_reference:
         try:
@@ -2897,8 +3021,25 @@ def remote_status() -> JSONResponse:
             {
                 "pending": state.get("pending"),
                 "last_command": state.get("last_command"),
+                "device_status": read_remote_device_status(),
             }
         )
+
+
+@app.post("/remote/device-status")
+async def update_remote_device_status(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    status = save_remote_device_status(payload if isinstance(payload, dict) else {})
+    return JSONResponse({"ok": True, "device_status": status})
+
+
+@app.get("/bible/status")
+def bible_status() -> JSONResponse:
+    return JSONResponse(read_bible_session_status())
 
 
 @app.get("/health")
@@ -2943,6 +3084,8 @@ def dashboard_overview() -> dict[str, Any]:
             "recent": conversations,
         },
         "activities": activities,
+        "bible": read_bible_session_status(),
+        "device_status": read_remote_device_status(),
     }
 
 
@@ -3478,7 +3621,7 @@ def chat(
                     synthesize_with_piper(reply.speech_text, REPLY_WAV_PATH)
 
             audio_url = public_url("/audio/wake_response.wav" if wake_audio_ready else "/audio/reply.wav")
-        elif reply.action in {"speak", "story"} and reply.speech_text:
+        elif reply.action in {"speak", "story", "bible"} and reply.speech_text:
             with reply_lock:
                 if popular_audio_path:
                     shutil.copyfile(popular_audio_path, REPLY_WAV_PATH)
@@ -3486,7 +3629,7 @@ def chat(
                     synthesize_with_piper(
                         reply.speech_text,
                         REPLY_WAV_PATH,
-                        mode="story" if reply.action == "story" else "conversation",
+                        mode="story" if reply.action in {"story", "bible"} else "conversation",
                     )
                     record_popular_response_candidate(transcription, reply, REPLY_WAV_PATH)
 

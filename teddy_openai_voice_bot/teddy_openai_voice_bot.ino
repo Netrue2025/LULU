@@ -144,6 +144,7 @@ using ChatNetworkClient = WiFiClient;
 #define RADIO_STREAM_PATH "/radio/nigeria.pcm"
 #define REMOTE_COMMAND_PATH "/remote/next?device_id=esp32-lulu"
 #define REMOTE_STATUS_PATH "/remote/status"
+#define REMOTE_DEVICE_STATUS_PATH "/remote/device-status"
 #define RADIO_STREAM_SAMPLE_RATE 16000
 #define RADIO_STREAM_CHANNELS 1
 
@@ -285,6 +286,12 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_STOP_READ_TIMEOUT_MS
 #define REMOTE_STOP_READ_TIMEOUT_MS 600
 #endif
+#ifndef REMOTE_DEVICE_STATUS_INTERVAL_MS
+#define REMOTE_DEVICE_STATUS_INTERVAL_MS 30000
+#endif
+#ifndef REMOTE_DEVICE_STATUS_TIMEOUT_MS
+#define REMOTE_DEVICE_STATUS_TIMEOUT_MS 2500
+#endif
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
@@ -344,6 +351,7 @@ uint8_t speakingFaceFrame = 0;
 unsigned long lastSpeakingFaceMs = 0;
 unsigned long lastRemoteControlPollMs = 0;
 unsigned long lastRemoteControlFailureMs = 0;
+unsigned long lastRemoteDeviceStatusMs = 0;
 bool speakerOutputReady = false;
 uint32_t speakerOutputSampleRate = 0;
 bool micInputReady = false;
@@ -537,6 +545,88 @@ void prepareChatClient(ChatNetworkClient &client, uint32_t timeoutMs)
   client.setInsecure();
 #endif
   client.setTimeout(timeoutMs);
+}
+
+String jsonEscapeValue(const String &value)
+{
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (uint16_t i = 0; i < value.length(); i++)
+  {
+    char c = value[i];
+    if (c == '\\')
+      escaped += "\\\\";
+    else if (c == '"')
+      escaped += "\\\"";
+    else if (c == '\n')
+      escaped += "\\n";
+    else if (c == '\r')
+      escaped += "\\r";
+    else
+      escaped += c;
+  }
+  return escaped;
+}
+
+const char *currentStateName()
+{
+  switch (currentState)
+  {
+  case TeddyState::IDLE:
+    return "idle";
+  case TeddyState::LISTENING:
+    return "listening";
+  case TeddyState::THINKING:
+    return "thinking";
+  case TeddyState::SPEAKING:
+    return "speaking";
+  case TeddyState::CONNECTION_ERROR:
+    return "connection_error";
+  }
+  return "unknown";
+}
+
+void reportRemoteDeviceStatus(bool force = false)
+{
+#if REMOTE_CONTROL_ENABLED
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  unsigned long now = millis();
+  if (!force && now - lastRemoteDeviceStatusMs < REMOTE_DEVICE_STATUS_INTERVAL_MS)
+    return;
+  lastRemoteDeviceStatusMs = now;
+
+  String body;
+  body.reserve(220);
+  body += "{\"device_id\":\"esp32-lulu\",";
+  body += "\"wifi_connected\":true,";
+  body += "\"wifi_ssid\":\"" + jsonEscapeValue(WiFi.SSID()) + "\",";
+  body += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
+  body += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
+  body += "\"free_heap\":" + String((unsigned long)ESP.getFreeHeap()) + ",";
+  body += "\"state\":\"" + String(currentStateName()) + "\"}";
+
+  HTTPClient http;
+  ChatNetworkClient client;
+  prepareChatClient(client, REMOTE_DEVICE_STATUS_TIMEOUT_MS);
+  String url = buildServerUrl(REMOTE_DEVICE_STATUS_PATH);
+  if (!http.begin(client, url))
+  {
+    client.stop();
+    return;
+  }
+
+  http.setTimeout(REMOTE_DEVICE_STATUS_TIMEOUT_MS);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(body);
+  if (code > 0 && code != HTTP_CODE_OK)
+    Serial.printf("[REMOTE] device status HTTP %d\n", code);
+  http.end();
+  client.stop();
+#else
+  (void)force;
+#endif
 }
 
 class MemoryReadStream : public Stream
@@ -3796,6 +3886,7 @@ void setup()
   reminderManager.begin(Wire, sdReady);
   connectWiFi();
   beginSDFileManager(sdReady);
+  reportRemoteDeviceStatus(true);
   reminderManager.syncFromNtpIfOnline(WiFi.status() == WL_CONNECTED);
   updateRoomClimate(true);
 
@@ -3817,6 +3908,7 @@ void loop()
   updateStatusLeds();
   logTouchDiagnostics();
   handleSDFileManager();
+  reportRemoteDeviceStatus();
   if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
   {
     setIdleState();
