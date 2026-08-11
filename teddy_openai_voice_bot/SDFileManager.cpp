@@ -593,6 +593,35 @@ static void handleWifiConnect()
   storageServer.send(202, F("application/json"), F("{\"queued\":true,\"detail\":\"LULU is connecting to the selected WiFi\"}"));
 }
 
+static void handleWifiDisconnect()
+{
+  Preferences preferences;
+  if (preferences.begin("lulu_wifi", false))
+  {
+    preferences.clear();
+    preferences.end();
+  }
+
+  storageServer.send(202, F("application/json"), F("{\"queued\":true,\"detail\":\"LULU is disconnecting from WiFi\"}"));
+  WiFi.disconnect(true, true);
+}
+
+static void handleWifiStatus()
+{
+  String json;
+  json.reserve(192);
+  json += F("{\"connected\":");
+  json += WiFi.status() == WL_CONNECTED ? F("true") : F("false");
+  json += F(",\"ssid\":\"");
+  json += jsonEscape(WiFi.SSID());
+  json += F("\",\"ip\":\"");
+  json += WiFi.localIP().toString();
+  json += F("\",\"rssi\":");
+  json += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+  json += '}';
+  storageServer.send(200, F("application/json"), json);
+}
+
 static void applyPendingWifiReconnect()
 {
   if (!pendingWifiReconnect)
@@ -626,8 +655,10 @@ void beginSDFileManager(bool sdAvailable)
   storageServer.on("/rename", HTTP_POST, handleRename);
   storageServer.on("/mkdir", HTTP_POST, handleMkdir);
   storageServer.on("/upload", HTTP_POST, handleUploadDone, handleUploadData);
+  storageServer.on("/wifi/status", HTTP_GET, handleWifiStatus);
   storageServer.on("/wifi/scan", HTTP_GET, handleWifiScan);
   storageServer.on("/wifi/connect", HTTP_POST, handleWifiConnect);
+  storageServer.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
   storageServer.enableCORS(true);
   storageServer.begin();
   storageServerRunning = true;
