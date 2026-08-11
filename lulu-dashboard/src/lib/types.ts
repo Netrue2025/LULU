@@ -74,3 +74,26 @@ export type LuluHealth = {
   source: string;
   checked_at: string;
 };
+
+export type LuluOverviewLine = {
+  id: string;
+  speaker: "user" | "lulu" | string;
+  text: string;
+  time?: string;
+};
+
+export type LuluOverviewActivity = {
+  id: string;
+  timestamp: string;
+  description: string;
+};
+
+export type LuluOverview = {
+  checked_at: string;
+  conversation: {
+    user: LuluOverviewLine | null;
+    lulu: LuluOverviewLine | null;
+    recent: LuluOverviewLine[];
+  };
+  activities: LuluOverviewActivity[];
+};

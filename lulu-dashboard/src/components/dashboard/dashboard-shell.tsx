@@ -99,8 +99,8 @@ export function DashboardShell({
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r bg-card xl:block">
+    <div className="min-h-screen bg-background text-foreground">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r bg-card/92 backdrop-blur xl:block">
         <SidebarContent role={role} unreadAlerts={unreadAlerts} onLogout={logout} />
       </aside>
 
@@ -113,7 +113,7 @@ export function DashboardShell({
             exit={{ opacity: 0 }}
           >
             <motion.aside
-              className="h-full w-72 border-r bg-card"
+              className="h-full w-[82vw] max-w-80 border-r bg-card"
               initial={{ x: -288 }}
               animate={{ x: 0 }}
               exit={{ x: -288 }}
@@ -131,7 +131,7 @@ export function DashboardShell({
 
       <main className="xl:pl-72">
         <header className="sticky top-0 z-30 border-b bg-background/88 backdrop-blur">
-          <div className="flex h-16 items-center gap-3 px-4 sm:px-6">
+          <div className="flex min-h-16 items-center gap-2 px-3 py-2 sm:gap-3 sm:px-6">
             <Button variant="ghost" className="h-9 w-9 px-0 xl:hidden" onClick={() => setMobileNav(true)} title="Open menu">
               <Menu className="h-4 w-4" />
             </Button>
@@ -149,7 +149,7 @@ export function DashboardShell({
           </div>
         </header>
 
-        <div className="px-4 py-5 sm:px-6">
+        <div className="px-3 py-4 sm:px-6 sm:py-5">
           {children}
         </div>
       </main>
@@ -175,7 +175,7 @@ function SidebarContent({
     <div className="flex h-full flex-col">
       <div className="border-b px-5 py-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-pink-400 via-cyan-300 to-yellow-200 text-slate-950">
             <Cpu className="h-5 w-5" />
           </div>
           <div>
@@ -200,7 +200,7 @@ function SidebarContent({
               onClick={onNavigate}
               className={cn(
                 "mb-1 flex h-10 items-center gap-3 rounded-md px-3 text-sm transition",
-                active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                active ? "bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(236_72_153/0.22)]" : "text-muted-foreground hover:bg-muted hover:text-foreground"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />

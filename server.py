@@ -766,6 +766,95 @@ def append_activity(message: str) -> None:
     storage.append_log("activity.log", message)
 
 
+def key_activity_description(transcription: str, reply: TeddyReply) -> str | None:
+    if reply.action == "radio" and reply.display_text:
+        return reply.display_text
+    if reply.action == "music":
+        return reply.display_text or "Playing music from SD card."
+    if reply.action == "story":
+        return reply.display_text or "Reading story."
+    if reply.action in {"stop", "listen", "wake", "volume_up", "volume_down"}:
+        return reply.display_text or f"Action: {reply.action}"
+    if is_bible_question(transcription):
+        return reply.display_text or "Reading Bible."
+    if is_weather_question(transcription):
+        return reply.display_text or "Reading weather."
+    return None
+
+
+KEY_ACTIVITY_RE = re.compile(
+    r"\b("
+    r"playing|radio|music|song|bible|scripture|reading|story|listen|listening|"
+    r"speaking|recording|speech detected|saved|remote command|wake|stop|volume|weather"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def read_recent_activity(limit: int = 12) -> list[dict[str, str]]:
+    log_path = storage.get_data_path("logs/activity.log")
+    if not log_path.exists():
+        return []
+
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+    events: list[dict[str, str]] = []
+    for index, line in enumerate(reversed(lines)):
+        match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s+(.+)$", line.strip())
+        if match:
+            timestamp, message = match.groups()
+        else:
+            timestamp, message = datetime.now().isoformat(timespec="seconds"), line.strip()
+        if not message or not KEY_ACTIVITY_RE.search(message):
+            continue
+        events.append(
+            {
+                "id": f"activity-{timestamp}-{index}",
+                "timestamp": timestamp,
+                "description": message,
+            }
+        )
+        if len(events) >= limit:
+            break
+    return events
+
+
+def read_recent_conversation(limit: int = 12) -> list[dict[str, str]]:
+    conversation_root = storage.get_data_path("conversations")
+    if not conversation_root.exists():
+        return []
+
+    files = sorted(
+        (path for path in conversation_root.rglob("*.json") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    items: list[dict[str, str]] = []
+    for file_path in files[:7]:
+        relative = file_path.relative_to(storage.refresh_data_dir())
+        records = storage.load_json(relative, [])
+        if not isinstance(records, list):
+            continue
+        for record in reversed(records):
+            if not isinstance(record, dict):
+                continue
+            speaker = str(record.get("speaker", "")).strip().lower()
+            text = str(record.get("text", "")).strip()
+            item_time = str(record.get("time", "")).strip()
+            if not speaker or not text:
+                continue
+            items.append(
+                {
+                    "id": f"{file_path.stem}-{len(items)}",
+                    "speaker": speaker,
+                    "text": text,
+                    "time": item_time,
+                }
+            )
+            if len(items) >= limit:
+                return items
+    return items
+
+
 radio_cache_lock = threading.Lock()
 reply_cache_lock = threading.Lock()
 story_lock = threading.Lock()
@@ -2839,6 +2928,24 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/dashboard/overview")
+def dashboard_overview() -> dict[str, Any]:
+    """Return the small live feed used by the admin overview terminal."""
+    conversations = read_recent_conversation()
+    activities = read_recent_activity()
+    latest_user = next((item for item in conversations if item.get("speaker") == "user"), None)
+    latest_lulu = next((item for item in conversations if item.get("speaker") == "lulu"), None)
+    return {
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "conversation": {
+            "user": latest_user,
+            "lulu": latest_lulu,
+            "recent": conversations,
+        },
+        "activities": activities,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def root() -> str:
     return """
@@ -3358,6 +3465,10 @@ def chat(
                 room_temperature_c=parse_optional_float(room_temperature_c),
                 room_humidity_percent=parse_optional_float(room_humidity_percent),
             )
+
+        key_activity = key_activity_description(transcription, reply)
+        if key_activity:
+            append_activity(key_activity)
 
         audio_url = ""
         if reply.action == "wake":

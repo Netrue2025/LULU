@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { initialEvents } from "@/lib/mock-data";
-import type { ActivityEvent, LuluHealth, LuluStatus } from "@/lib/types";
+import type { ActivityEvent, LuluHealth, LuluOverview, LuluStatus } from "@/lib/types";
 
 export function useLuluRealtime() {
   const [health, setHealth] = useState<LuluHealth | null>(null);
+  const [overview, setOverview] = useState<LuluOverview | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>(initialEvents);
   const [lastError, setLastError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -13,7 +14,7 @@ export function useLuluRealtime() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadHealthOnce() {
+    async function loadHealth() {
       try {
         const response = await fetch("/api/lulu/health", { cache: "no-store" });
         if (!response.ok) throw new Error(`Health check failed with ${response.status}`);
@@ -49,9 +50,38 @@ export function useLuluRealtime() {
       }
     }
 
-    void loadHealthOnce();
+    async function loadOverview() {
+      try {
+        const response = await fetch("/api/lulu/overview", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as LuluOverview;
+        if (cancelled) return;
+        setOverview(data);
+        if (data.activities.length > 0) {
+          setEvents((current) => {
+            const mapped = data.activities.map((activity) => ({
+              id: activity.id,
+              timestamp: activity.timestamp,
+              type: "device" as const,
+              description: activity.description
+            }));
+            const known = new Set(mapped.map((event) => event.id));
+            return [...mapped, ...current.filter((event) => !known.has(event.id))].slice(0, 150);
+          });
+        }
+      } catch {
+        // Health remains the authoritative online/offline signal.
+      }
+    }
+
+    void loadHealth();
+    void loadOverview();
+    const healthTimer = window.setInterval(loadHealth, 15000);
+    const overviewTimer = window.setInterval(loadOverview, 4000);
     return () => {
       cancelled = true;
+      window.clearInterval(healthTimer);
+      window.clearInterval(overviewTimer);
     };
   }, []);
 
@@ -61,5 +91,5 @@ export function useLuluRealtime() {
     return health?.status === "online" ? "online" : "offline";
   }, [health?.status, lastError, loading]);
 
-  return { health, events, setEvents, status, lastError, loading };
+  return { health, overview, events, setEvents, status, lastError, loading };
 }

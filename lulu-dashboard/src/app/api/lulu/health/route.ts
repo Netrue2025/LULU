@@ -24,7 +24,7 @@ async function getDiskUsage() {
 
 export async function GET() {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), 6000);
 
   let health: Record<string, string> | null = null;
   let serverOnline = false;
