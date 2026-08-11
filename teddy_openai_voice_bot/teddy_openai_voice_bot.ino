@@ -2261,7 +2261,7 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
 {
   lastPlaybackStoppedByButton = false;
   audioStep(1, "HTTP BEGIN");
-  Serial.println("Downloading audio: " + audioUrl);
+  Serial.println(String(liveStream ? "Streaming audio: " : "Downloading audio: ") + audioUrl);
 
   if (!ensureWiFiReady())
     return false;
@@ -2270,7 +2270,7 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
   ChatNetworkClient client;
   prepareChatClient(client, AUDIO_READ_TIMEOUT_MS);
 
-  showText("Speaking...", "Downloading");
+  showText("Speaking...", liveStream ? "Streaming" : "Downloading");
   if (!http.begin(client, audioUrl))
   {
     lastServerError = "Bad audio URL";
@@ -3725,7 +3725,11 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
 
   audioStatus("before spoken reply playback");
   setSpeakingState();
-  if (!downloadAndPlayWav(reply.audioUrl, reply.text, false, true))
+  bool streamReplyLive = reply.action == "bible" ||
+                         reply.action == "story" ||
+                         reply.audioUrl.indexOf(".up.railway.app") >= 0 ||
+                         reply.audioUrl.indexOf("railway.app") >= 0;
+  if (!downloadAndPlayWav(reply.audioUrl, reply.text, streamReplyLive, true))
   {
     if (lastServerError.length() > 0)
       showWrapped("Playback failed", lastServerError);
