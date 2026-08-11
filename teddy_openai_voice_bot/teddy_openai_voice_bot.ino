@@ -123,6 +123,15 @@
 #ifndef CHAT_SERVER_USE_TLS
 #define CHAT_SERVER_USE_TLS 0
 #endif
+#ifndef WIFI_SETUP_AP_ENABLED
+#define WIFI_SETUP_AP_ENABLED 1
+#endif
+#ifndef WIFI_SETUP_AP_SSID
+#define WIFI_SETUP_AP_SSID "LULU-SETUP"
+#endif
+#ifndef WIFI_SETUP_AP_PASSWORD
+#define WIFI_SETUP_AP_PASSWORD "lulu-setup"
+#endif
 #if CHAT_SERVER_USE_TLS
 #define CHAT_SERVER_SCHEME "https"
 using ChatNetworkClient = WiFiClientSecure;
@@ -1345,8 +1354,25 @@ bool connectWiFi()
   if (WiFi.status() != WL_CONNECTED)
   {
     Serial.println("WiFi connect timeout");
-    setErrorState();
+#if WIFI_SETUP_AP_ENABLED
+    WiFi.mode(WIFI_AP_STA);
+    if (WiFi.softAP(WIFI_SETUP_AP_SSID, WIFI_SETUP_AP_PASSWORD))
+    {
+      Serial.print("WiFi setup AP started: ");
+      Serial.print(WIFI_SETUP_AP_SSID);
+      Serial.print(" IP=");
+      Serial.println(WiFi.softAPIP());
+      showText("Setup WiFi", String(WIFI_SETUP_AP_SSID));
+    }
+    else
+    {
+      Serial.println("WiFi setup AP failed");
+      showText("WiFi offline", "Check router");
+    }
+#else
     showText("WiFi offline", "Check router");
+#endif
+    setErrorState();
     return false;
   }
 

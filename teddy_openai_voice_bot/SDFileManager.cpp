@@ -18,6 +18,13 @@
 #define SD_FILE_MANAGER_CHUNK_BYTES 1024
 #endif
 
+#ifndef WIFI_SETUP_AP_SSID
+#define WIFI_SETUP_AP_SSID "LULU-SETUP"
+#endif
+#ifndef WIFI_SETUP_AP_PASSWORD
+#define WIFI_SETUP_AP_PASSWORD "lulu-setup"
+#endif
+
 static WebServer storageServer(SD_FILE_MANAGER_PORT);
 static File uploadFile;
 static bool storageServerRunning = false;
@@ -74,6 +81,20 @@ static String jsonEscape(const String &value)
       escaped += c;
   }
   return escaped;
+}
+
+static bool startWifiSetupAccessPoint()
+{
+  WiFi.mode(WIFI_AP_STA);
+  bool started = WiFi.softAP(WIFI_SETUP_AP_SSID, WIFI_SETUP_AP_PASSWORD);
+  if (started)
+  {
+    Serial.print(F("[WIFI] Setup AP: "));
+    Serial.print(WIFI_SETUP_AP_SSID);
+    Serial.print(F(" http://"));
+    Serial.println(WiFi.softAPIP());
+  }
+  return started;
 }
 
 static bool saveWifiCredentials(const String &ssid, const String &password)
@@ -371,7 +392,16 @@ static void handleIndex()
 {
   if (!storageSdReady)
   {
-    storageServer.send(503, F("text/plain"), F("SD card is not ready"));
+    String html;
+    html.reserve(1400);
+    html += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
+    html += F("<title>LULU WiFi Setup</title><style>body{font-family:Arial,sans-serif;background:#111827;color:#fff;margin:0;padding:24px}main{max-width:520px;margin:auto}.box{border:1px solid #334155;border-radius:8px;padding:16px;background:#1f2937}a,button{display:inline-block;margin-top:12px;border:0;border-radius:6px;background:#22d3ee;color:#111827;padding:10px 12px;font-weight:700;text-decoration:none}.muted{color:#cbd5e1;font-size:14px;line-height:1.5}code{color:#fde68a}</style></head><body><main><div class='box'>");
+    html += F("<h1>LULU WiFi Setup</h1><p class='muted'>The SD card file manager is not ready, but WiFi setup is available.</p>");
+    html += F("<p class='muted'>Use the dashboard connection popup with device IP <code>");
+    html += WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+    html += F("</code>, or call <code>/wifi/scan</code>, <code>/wifi/status</code>, <code>/wifi/connect</code>, and <code>/wifi/disconnect</code>.</p>");
+    html += F("<a href='/wifi/status'>Check WiFi status</a> <a href='/wifi/scan'>Search WiFi</a></div></main></body></html>");
+    storageServer.send(200, F("text/html"), html);
     return;
   }
 
@@ -604,6 +634,7 @@ static void handleWifiDisconnect()
 
   storageServer.send(202, F("application/json"), F("{\"queued\":true,\"detail\":\"LULU is disconnecting from WiFi\"}"));
   WiFi.disconnect(true, true);
+  startWifiSetupAccessPoint();
 }
 
 static void handleWifiStatus()
@@ -616,7 +647,11 @@ static void handleWifiStatus()
   json += jsonEscape(WiFi.SSID());
   json += F("\",\"ip\":\"");
   json += WiFi.localIP().toString();
-  json += F("\",\"rssi\":");
+  json += F("\",\"setup_ip\":\"");
+  json += WiFi.softAPIP().toString();
+  json += F("\",\"mode\":");
+  json += String((int)WiFi.getMode());
+  json += F(",\"rssi\":");
   json += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
   json += '}';
   storageServer.send(200, F("application/json"), json);
@@ -630,22 +665,39 @@ static void applyPendingWifiReconnect()
   pendingWifiReconnect = false;
   Serial.print(F("[WIFI] Dashboard requested connection to "));
   Serial.println(pendingWifiSsid);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.begin(pendingWifiSsid.c_str(), pendingWifiPassword.c_str());
+}
+
+static void stopSetupAccessPointIfConnected()
+{
+  if (WiFi.status() != WL_CONNECTED || !(WiFi.getMode() & WIFI_AP))
+    return;
+
+  Serial.print(F("[WIFI] Connected to "));
+  Serial.print(WiFi.SSID());
+  Serial.print(F(" at "));
+  Serial.println(WiFi.localIP());
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
 }
 
 void beginSDFileManager(bool sdAvailable)
 {
 #if SD_FILE_MANAGER_ENABLED
   storageSdReady = sdAvailable;
-  if (!storageSdReady || storageServerRunning || WiFi.status() != WL_CONNECTED)
+  bool networkReady = WiFi.status() == WL_CONNECTED || (WiFi.getMode() & WIFI_AP);
+  if (storageServerRunning || !networkReady)
     return;
 
-  for (uint8_t i = 0; i < sizeof(defaultFolders) / sizeof(defaultFolders[0]); i++)
+  if (storageSdReady)
   {
-    String path = resolveExistingDirectory(defaultFolders[i]);
-    if (!SD.exists(path))
-      SD.mkdir(defaultFolders[i]);
+    for (uint8_t i = 0; i < sizeof(defaultFolders) / sizeof(defaultFolders[0]); i++)
+    {
+      String path = resolveExistingDirectory(defaultFolders[i]);
+      if (!SD.exists(path))
+        SD.mkdir(defaultFolders[i]);
+    }
   }
 
   storageServer.on("/", HTTP_GET, handleIndex);
@@ -664,7 +716,7 @@ void beginSDFileManager(bool sdAvailable)
   storageServerRunning = true;
 
   Serial.print(F("[SDWEB] LULU Storage: http://"));
-  Serial.println(WiFi.localIP());
+  Serial.println(WiFi.status() == WL_CONNECTED ? WiFi.localIP() : WiFi.softAPIP());
 #else
   (void)sdAvailable;
 #endif
@@ -677,6 +729,7 @@ void handleSDFileManager()
   {
     storageServer.handleClient();
     applyPendingWifiReconnect();
+    stopSetupAccessPointIfConnected();
   }
 #endif
 }
