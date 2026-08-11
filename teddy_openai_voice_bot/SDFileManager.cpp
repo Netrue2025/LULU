@@ -3,6 +3,7 @@
 #include <SD.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <Preferences.h>
 #include <ctype.h>
 
 #ifndef SD_FILE_MANAGER_ENABLED
@@ -21,6 +22,9 @@ static WebServer storageServer(SD_FILE_MANAGER_PORT);
 static File uploadFile;
 static bool storageServerRunning = false;
 static bool storageSdReady = false;
+static bool pendingWifiReconnect = false;
+static String pendingWifiSsid;
+static String pendingWifiPassword;
 
 static const char *defaultFolders[] = {
     "/Music",
@@ -70,6 +74,17 @@ static String jsonEscape(const String &value)
       escaped += c;
   }
   return escaped;
+}
+
+static bool saveWifiCredentials(const String &ssid, const String &password)
+{
+  Preferences preferences;
+  if (!preferences.begin("lulu_wifi", false))
+    return false;
+  bool ok = preferences.putString("ssid", ssid) > 0;
+  preferences.putString("password", password);
+  preferences.end();
+  return ok;
 }
 
 static String urlEncode(const String &value)
@@ -523,6 +538,73 @@ static void handleUploadData()
   }
 }
 
+static void handleWifiScan()
+{
+  int count = WiFi.scanNetworks(false, true);
+  if (count < 0)
+  {
+    storageServer.send(503, F("application/json"), F("{\"detail\":\"WiFi scan failed\",\"networks\":[]}"));
+    return;
+  }
+
+  String json;
+  json.reserve(256 + (count * 96));
+  json += F("{\"networks\":[");
+  for (int i = 0; i < count; i++)
+  {
+    if (i > 0)
+      json += ',';
+    json += F("{\"ssid\":\"");
+    json += jsonEscape(WiFi.SSID(i));
+    json += F("\",\"rssi\":");
+    json += String(WiFi.RSSI(i));
+    json += F(",\"secure\":");
+    json += WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? F("false") : F("true");
+    json += F(",\"channel\":");
+    json += String(WiFi.channel(i));
+    json += '}';
+  }
+  json += F("]}");
+  WiFi.scanDelete();
+  storageServer.send(200, F("application/json"), json);
+}
+
+static void handleWifiConnect()
+{
+  String ssid = storageServer.arg(F("ssid"));
+  String password = storageServer.arg(F("password"));
+  ssid.trim();
+
+  if (ssid.length() == 0 || ssid.length() > 32 || password.length() > 64)
+  {
+    storageServer.send(400, F("application/json"), F("{\"detail\":\"Invalid WiFi credentials\"}"));
+    return;
+  }
+
+  if (!saveWifiCredentials(ssid, password))
+  {
+    storageServer.send(500, F("application/json"), F("{\"detail\":\"Could not save WiFi credentials\"}"));
+    return;
+  }
+
+  pendingWifiSsid = ssid;
+  pendingWifiPassword = password;
+  pendingWifiReconnect = true;
+  storageServer.send(202, F("application/json"), F("{\"queued\":true,\"detail\":\"LULU is connecting to the selected WiFi\"}"));
+}
+
+static void applyPendingWifiReconnect()
+{
+  if (!pendingWifiReconnect)
+    return;
+
+  pendingWifiReconnect = false;
+  Serial.print(F("[WIFI] Dashboard requested connection to "));
+  Serial.println(pendingWifiSsid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(pendingWifiSsid.c_str(), pendingWifiPassword.c_str());
+}
+
 void beginSDFileManager(bool sdAvailable)
 {
 #if SD_FILE_MANAGER_ENABLED
@@ -544,6 +626,8 @@ void beginSDFileManager(bool sdAvailable)
   storageServer.on("/rename", HTTP_POST, handleRename);
   storageServer.on("/mkdir", HTTP_POST, handleMkdir);
   storageServer.on("/upload", HTTP_POST, handleUploadDone, handleUploadData);
+  storageServer.on("/wifi/scan", HTTP_GET, handleWifiScan);
+  storageServer.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   storageServer.enableCORS(true);
   storageServer.begin();
   storageServerRunning = true;
@@ -559,7 +643,10 @@ void handleSDFileManager()
 {
 #if SD_FILE_MANAGER_ENABLED
   if (storageServerRunning)
+  {
     storageServer.handleClient();
+    applyPendingWifiReconnect();
+  }
 #endif
 }
 

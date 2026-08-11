@@ -7,6 +7,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <Wire.h>
+#include <Preferences.h>
 #include <U8g2lib.h>
 #include "driver/i2s.h"
 #include "esp_heap_caps.h"
@@ -1316,8 +1317,21 @@ bool recordWav(uint8_t **wavOut, size_t *wavBytesOut, bool quietIsError, const S
 bool connectWiFi()
 {
   showText("Connecting WiFi");
+  Preferences wifiPreferences;
+  String savedSsid;
+  String savedPassword;
+  if (wifiPreferences.begin("lulu_wifi", true))
+  {
+    savedSsid = wifiPreferences.getString("ssid", "");
+    savedPassword = wifiPreferences.getString("password", "");
+    wifiPreferences.end();
+  }
+
+  const char *ssid = savedSsid.length() > 0 ? savedSsid.c_str() : WIFI_SSID;
+  const char *password = savedSsid.length() > 0 ? savedPassword.c_str() : WIFI_PASSWORD;
+
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(ssid, password);
 
   unsigned long startedMs = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startedMs < WIFI_CONNECT_TIMEOUT_MS)
