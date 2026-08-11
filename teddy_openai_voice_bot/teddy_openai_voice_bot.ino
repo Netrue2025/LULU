@@ -103,7 +103,7 @@
 #define MAX_REPLY_RAM_WAV_BYTES 786432
 #endif
 #ifndef MAX_REPLY_SD_WAV_BYTES
-#define MAX_REPLY_SD_WAV_BYTES 2097152
+#define MAX_REPLY_SD_WAV_BYTES (10UL * 1024UL * 1024UL)
 #endif
 #ifndef I2S_WRITE_TIMEOUT_MS
 #define I2S_WRITE_TIMEOUT_MS 2000
@@ -1729,7 +1729,7 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
   if (!sdReady)
     return false;
 
-  if (contentLength > (int)MAX_REPLY_SD_WAV_BYTES)
+  if (contentLength > 0 && (uint32_t)contentLength > MAX_REPLY_SD_WAV_BYTES)
   {
     lastServerError = "Reply WAV too large for SD cache";
     return false;
@@ -3557,7 +3557,7 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
     return true;
   }
 
-  if (reply.action == "story")
+  if (reply.action == "story" && reply.audioUrl.length() == 0)
   {
     if (playStoryFromSD())
     {

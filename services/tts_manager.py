@@ -83,6 +83,7 @@ class TTSManager:
         elevenlabs_provider: ElevenLabsProvider,
         piper_provider: PiperProvider,
         ffmpeg_bin_resolver,
+        ffmpeg_timeout_seconds: int = 180,
         logger: logging.Logger | None = None,
     ) -> None:
         self.config_path = config_path
@@ -91,6 +92,7 @@ class TTSManager:
         self.elevenlabs = elevenlabs_provider
         self.piper = piper_provider
         self.ffmpeg_bin_resolver = ffmpeg_bin_resolver
+        self.ffmpeg_timeout_seconds = ffmpeg_timeout_seconds
         self.logger = logger or logging.getLogger(__name__)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.audio_dir.mkdir(parents=True, exist_ok=True)
@@ -358,7 +360,13 @@ class TTSManager:
         if abs(gain_db) >= 0.1:
             command.extend(["-af", f"volume={gain_db:g}dB"])
         command.append(str(temp_path))
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=self.ffmpeg_timeout_seconds,
+            check=False,
+        )
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"ffmpeg TTS conversion failed: {stderr}")

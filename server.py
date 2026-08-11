@@ -177,6 +177,7 @@ RADIO_CLIP_SECONDS = float(os.getenv("RADIO_CLIP_SECONDS", "18"))
 RADIO_CLIP_TIMEOUT_SECONDS = float(os.getenv("RADIO_CLIP_TIMEOUT_SECONDS", "35"))
 RADIO_STREAM_SAMPLE_RATE = int(os.getenv("RADIO_STREAM_SAMPLE_RATE", "16000"))
 RADIO_STREAM_CHANNELS = int(os.getenv("RADIO_STREAM_CHANNELS", "1"))
+RADIO_STREAM_CHUNK_BYTES = int(os.getenv("RADIO_STREAM_CHUNK_BYTES", "2048"))
 RADIO_STREAM_BITS_PER_SAMPLE = 16
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 DEFAULT_PIPER_BIN = BASE_DIR / "tools" / "piper" / ("piper.exe" if os.name == "nt" else "piper")
@@ -202,6 +203,7 @@ PIPER_SPEAKER_ID = os.getenv("PIPER_SPEAKER_ID", "").strip()
 PIPER_LENGTH_SCALE = os.getenv("PIPER_LENGTH_SCALE", "1.06").strip()
 PIPER_NOISE_SCALE = os.getenv("PIPER_NOISE_SCALE", "0.55").strip()
 PIPER_NOISE_W = os.getenv("PIPER_NOISE_W", "0.65").strip()
+TTS_FFMPEG_TIMEOUT_SECONDS = int(os.getenv("TTS_FFMPEG_TIMEOUT_SECONDS", "180"))
 REPLY_WAV_PATH = AUDIO_DIR / "reply.wav"
 WAKE_RESPONSE_FILE_NAME = os.getenv("WAKE_RESPONSE_FILE_NAME", "LULU.wav")
 WAKE_RESPONSE_WAV_PATH = AUDIO_DIR / "wake_response.wav"
@@ -222,7 +224,7 @@ POPULAR_RESPONSE_CACHE_MAX_TEXT_CHARS = int(os.getenv("POPULAR_RESPONSE_CACHE_MA
 POPULAR_RESPONSE_CACHE_META = "cache/popular_response_cache.json"
 POPULAR_RESPONSE_CACHE_AUDIO_DIR = Path("Voices") / "ResponseCache"
 STORY_PATH = Path(os.getenv("STORY_PATH", str(BASE_DIR / "stories.txt")))
-STORY_MAX_BYTES = int(os.getenv("STORY_MAX_BYTES", "131072"))
+STORY_MAX_BYTES = int(os.getenv("STORY_MAX_BYTES", str(1024 * 1024)))
 INTERACTIVE_FOLLOW_UPS_ENABLED = os.getenv("INTERACTIVE_FOLLOW_UPS_ENABLED", "1").strip().lower() not in {
     "0",
     "false",
@@ -633,6 +635,7 @@ tts_manager = TTSManager(
         noise_w=PIPER_NOISE_W,
     ),
     ffmpeg_bin_resolver=lambda: resolve_ffmpeg_bin(),
+    ffmpeg_timeout_seconds=TTS_FFMPEG_TIMEOUT_SECONDS,
     logger=logger,
 )
 
@@ -1062,7 +1065,7 @@ def sync_legacy_story_file() -> None:
         meta = storage.load_json("dashboard/source_meta.json", storage.DEFAULT_SOURCE_META)
         if not isinstance(meta, dict):
             meta = {}
-        if meta.get("stories_txt_mtime") == mtime:
+        if meta.get("stories_txt_mtime") == mtime and meta.get("stories_txt_limit") == STORY_MAX_BYTES:
             return
 
         stories = parse_story_text(STORY_PATH.read_text(encoding="utf-8", errors="replace"))
@@ -1072,6 +1075,7 @@ def sync_legacy_story_file() -> None:
         ]
         storage.save_json("dashboard/stories.json", records)
         meta["stories_txt_mtime"] = mtime
+        meta["stories_txt_limit"] = STORY_MAX_BYTES
         meta["stories_txt_imported_at"] = datetime.now().isoformat(timespec="seconds")
         storage.save_json("dashboard/source_meta.json", meta)
     except OSError as exc:
@@ -1809,7 +1813,7 @@ def build_radio_stream(station: RadioStation):
         )
 
         while True:
-            chunk = process.stdout.read(4096)
+            chunk = process.stdout.read(RADIO_STREAM_CHUNK_BYTES)
             if not chunk:
                 break
             yield chunk
@@ -1866,7 +1870,7 @@ def build_radio_pcm_stream(station: RadioStation):
             raise RuntimeError("ffmpeg did not open stdout")
 
         while True:
-            chunk = process.stdout.read(4096)
+            chunk = process.stdout.read(RADIO_STREAM_CHUNK_BYTES)
             if not chunk:
                 break
             yield chunk
@@ -2417,6 +2421,8 @@ def add_interactive_follow_up(reply: TeddyReply, transcription: str) -> TeddyRep
         return reply
     if reply.action != "speak" or not reply.speech_text.strip():
         return reply
+    if is_bible_question(transcription) or len(reply.speech_text) > 900:
+        return reply
     if EXISTING_FOLLOW_UP_RE.search(reply.speech_text):
         return reply
 
@@ -2822,6 +2828,7 @@ def health() -> dict[str, str]:
         "bible_translation": BIBLE_TRANSLATION,
         "radio_country": "NG",
         "radio_stream_format": f"{RADIO_STREAM_SAMPLE_RATE}Hz {RADIO_STREAM_CHANNELS}ch PCM16 raw PCM",
+        "radio_stream_chunk_bytes": str(RADIO_STREAM_CHUNK_BYTES),
         "radio_live_stream": str(RADIO_LIVE_STREAM).lower(),
         "ffmpeg_available": str(bool(resolve_ffmpeg_bin())).lower(),
         "piper_voice": str(PIPER_VOICE_MODEL),
