@@ -96,4 +96,20 @@ export type LuluOverview = {
     recent: LuluOverviewLine[];
   };
   activities: LuluOverviewActivity[];
+  bible?: {
+    active: boolean;
+    reference?: string;
+    translation?: string;
+    next_part?: number;
+    total_parts?: number;
+    updated_at?: string;
+  };
+  device_status?: {
+    wifi_connected?: boolean;
+    wifi_ssid?: string;
+    wifi_ip?: string;
+    wifi_rssi?: number;
+    updated_at?: string;
+    state?: string;
+  } | null;
 };

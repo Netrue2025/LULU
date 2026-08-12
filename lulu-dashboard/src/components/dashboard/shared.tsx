@@ -45,9 +45,9 @@ export function StatusBadge({ status }: { status: LuluStatus | string }) {
   return <Badge tone={tone}>{status}</Badge>;
 }
 
-export function SectionCard({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+export function SectionCard({ title, children, action, className }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle>{title}</CardTitle>
         {action}

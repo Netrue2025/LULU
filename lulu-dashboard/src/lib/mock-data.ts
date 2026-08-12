@@ -10,8 +10,9 @@ import type {
 
 export const initialEvents: ActivityEvent[] = [
   { id: "evt-1", timestamp: new Date().toISOString(), type: "connection", description: "Dashboard connected" },
-  { id: "evt-2", timestamp: new Date().toISOString(), type: "audio", description: "Audio monitor standing by" },
-  { id: "evt-3", timestamp: new Date().toISOString(), type: "whisper", description: "Whisper status synced from health endpoint" }
+  { id: "evt-2", timestamp: new Date().toISOString(), type: "audio", description: "Playing radio 88.5FM" },
+  { id: "evt-3", timestamp: new Date().toISOString(), type: "audio", description: "Playing music \"Forever\"" },
+  { id: "evt-4", timestamp: new Date().toISOString(), type: "llm", description: "Reading Bible verses" }
 ];
 
 export const initialConversations: Conversation[] = [

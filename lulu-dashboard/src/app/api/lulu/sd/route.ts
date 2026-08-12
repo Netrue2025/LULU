@@ -123,6 +123,12 @@ export async function GET(request: Request) {
   const path = cleanPath(searchParams.get("path"));
 
   try {
+    if (action === "bible_status") {
+      const response = await fetchFromSd(baseUrl, "/bible/status");
+      const data = await response.json().catch(() => ({}));
+      return NextResponse.json(data, { status: response.status });
+    }
+
     if (action === "download") {
       const response = await fetchFromSd(baseUrl, `/download?path=${encodeURIComponent(path)}`);
       const headers = new Headers(response.headers);
