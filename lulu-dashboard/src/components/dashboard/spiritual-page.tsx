@@ -41,6 +41,7 @@ type BibleUploadResponse = {
 const DEFAULT_LULU_STORAGE_URL = process.env.NEXT_PUBLIC_LULU_SD_URL ?? "http://192.168.43.73";
 const LULU_STORAGE_URL_KEY = "lulu-storage-url";
 const BIBLE_ROOT_PATH = "lulu/bible";
+const SD_CONNECTION_MODE_KEY = "lulu-sd-connection-mode";
 
 function formatBytes(value = 0) {
   if (value < 1024) return `${value} B`;
@@ -57,6 +58,9 @@ export function SpiritualPage() {
   const [offlineBusy, setOfflineBusy] = useState(false);
   const [luluStorageUrl, setLuluStorageUrl] = useState(() =>
     typeof window === "undefined" ? DEFAULT_LULU_STORAGE_URL : window.localStorage.getItem(LULU_STORAGE_URL_KEY) ?? DEFAULT_LULU_STORAGE_URL
+  );
+  const [sdMode, setSdMode] = useState<"cloud" | "local">(() =>
+    typeof window === "undefined" ? "cloud" : (window.localStorage.getItem(SD_CONNECTION_MODE_KEY) === "local" ? "local" : "cloud")
   );
   const [bibleFiles, setBibleFiles] = useState<BibleSdItem[]>([]);
   const [biblePath, setBiblePath] = useState(BIBLE_ROOT_PATH);
@@ -80,6 +84,12 @@ export function SpiritualPage() {
 
   function directStorageUrl() {
     return luluStorageUrl.trim().replace(/\/$/, "");
+  }
+
+  function sdQueryParams() {
+    const params = new URLSearchParams({ mode: sdMode });
+    if (sdMode === "local") params.set("baseUrl", directStorageUrl());
+    return params;
   }
 
   async function sendRemoteCommand(action: "listen" | "stop") {
@@ -106,7 +116,10 @@ export function SpiritualPage() {
     setOfflineMessage("");
     try {
       const baseUrl = directStorageUrl();
-      const response = await fetch(`/api/lulu/sd?action=bible_status&baseUrl=${encodeURIComponent(baseUrl)}`, { cache: "no-store" });
+      const params = sdQueryParams();
+      params.set("action", "bible_status");
+      if (sdMode === "local") params.set("baseUrl", baseUrl);
+      const response = await fetch(`/api/lulu/sd?${params.toString()}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail ?? "Offline Bible status unavailable");
       setOfflineStatus(data);
@@ -123,7 +136,7 @@ export function SpiritualPage() {
     setOfflineMessage("");
     try {
       const response = await fetch(
-        `/api/lulu/sd?action=list&baseUrl=${encodeURIComponent(directStorageUrl())}&path=${encodeURIComponent(path)}`,
+        `/api/lulu/sd?${new URLSearchParams({ ...Object.fromEntries(sdQueryParams()), action: "list", path }).toString()}`,
         { cache: "no-store" }
       );
       const data = await response.json().catch(() => ({}));
@@ -203,7 +216,8 @@ export function SpiritualPage() {
       let uploaded = 0;
       for (const file of pendingBibleFiles) {
         const formData = new FormData();
-        formData.append("baseUrl", directStorageUrl());
+        formData.append("mode", sdMode);
+        if (sdMode === "local") formData.append("baseUrl", directStorageUrl());
         formData.append("path", BIBLE_ROOT_PATH);
         formData.append("files", file, file.webkitRelativePath || file.name);
 
@@ -215,7 +229,7 @@ export function SpiritualPage() {
         setBibleUploadProgress(Math.round((uploaded / pendingBibleFiles.length) * 100));
       }
 
-      setOfflineMessage(`Uploaded ${uploaded} Bible file(s) to LULU SD.`);
+      setOfflineMessage(sdMode === "cloud" ? `Queued ${uploaded} Bible file(s) for LULU SD sync.` : `Uploaded ${uploaded} Bible file(s) to LULU SD.`);
       setBibleUploadProgress(100);
       setBibleUploadPhase("Upload complete");
       clearBibleFiles(false);
@@ -233,7 +247,11 @@ export function SpiritualPage() {
       await loadBibleFiles(item.path);
       return;
     }
-    window.open(`/api/lulu/sd?action=download&baseUrl=${encodeURIComponent(directStorageUrl())}&path=${encodeURIComponent(item.path)}`, "_blank");
+    if (sdMode === "local") {
+      window.open(`/api/lulu/sd?action=download&baseUrl=${encodeURIComponent(directStorageUrl())}&path=${encodeURIComponent(item.path)}`, "_blank");
+      return;
+    }
+    setOfflineMessage("Cloud SD file download is not available yet.");
   }
 
   function parentBiblePath() {
@@ -340,12 +358,33 @@ export function SpiritualPage() {
                   <Input
                     aria-label="LULU SD address"
                     placeholder="LULU SD address"
+                    disabled={sdMode === "cloud"}
                     value={luluStorageUrl}
                     onChange={(event) => {
                       setLuluStorageUrl(event.target.value);
                       window.localStorage.setItem(LULU_STORAGE_URL_KEY, event.target.value);
                     }}
                   />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant={sdMode === "cloud" ? undefined : "secondary"}
+                      onClick={() => {
+                        setSdMode("cloud");
+                        window.localStorage.setItem(SD_CONNECTION_MODE_KEY, "cloud");
+                      }}
+                    >
+                      Cloud
+                    </Button>
+                    <Button
+                      variant={sdMode === "local" ? undefined : "secondary"}
+                      onClick={() => {
+                        setSdMode("local");
+                        window.localStorage.setItem(SD_CONNECTION_MODE_KEY, "local");
+                      }}
+                    >
+                      Local
+                    </Button>
+                  </div>
                   <div className="grid gap-2">
                     <Button disabled={offlineBusy} onClick={() => {
                       void loadBibleStatus();
@@ -364,12 +403,12 @@ export function SpiritualPage() {
                 <div className="space-y-3 text-xs">
                   <div>
                     <h3 className="text-sm font-semibold text-white">Upload Bible To SD</h3>
-                    <p className="mt-1 text-cyan-100/80">Target: /lulu/bible</p>
+                    <p className="mt-1 text-cyan-100/80">{sdMode === "cloud" ? "Cloud relay to /lulu/bible" : "Target: /lulu/bible"}</p>
                   </div>
                   <div className="space-y-2 rounded-md border border-white/10 bg-black/40 p-2 text-cyan-100/85">
                     <div className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" /><span>Prepare the ZIP with the Bible importer.</span></div>
                     <div className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" /><span>Select the generated lulu/bible folder.</span></div>
-                    <div className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" /><span>Keep LULU powered on until upload completes.</span></div>
+                    <div className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" /><span>Keep LULU online until SD sync completes.</span></div>
                   </div>
                   <label className="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-white/20 bg-black/30 p-3 text-center transition hover:bg-black/50">
                     <Upload className="h-5 w-5 text-cyan-100" />

@@ -160,6 +160,8 @@ using ChatNetworkClient = WiFiClient;
 #define REMOTE_COMMAND_PATH "/remote/next?device_id=esp32-lulu"
 #define REMOTE_STATUS_PATH "/remote/status"
 #define REMOTE_DEVICE_STATUS_PATH "/remote/device-status"
+#define REMOTE_SD_NEXT_PATH "/remote/sd/next?device_id=esp32-lulu"
+#define REMOTE_SD_RESULT_PATH "/remote/sd/result"
 #define RADIO_STREAM_SAMPLE_RATE 16000
 #define RADIO_STREAM_CHANNELS 1
 
@@ -307,6 +309,15 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_DEVICE_STATUS_TIMEOUT_MS
 #define REMOTE_DEVICE_STATUS_TIMEOUT_MS 2500
 #endif
+#ifndef REMOTE_SD_POLL_MS
+#define REMOTE_SD_POLL_MS 2500
+#endif
+#ifndef REMOTE_SD_TIMEOUT_MS
+#define REMOTE_SD_TIMEOUT_MS 8000
+#endif
+#ifndef REMOTE_SD_UPLOAD_TIMEOUT_MS
+#define REMOTE_SD_UPLOAD_TIMEOUT_MS 300000
+#endif
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 #if defined(FSPI)
@@ -333,6 +344,7 @@ struct RemoteCommand
 
 bool runConversationTurn(bool quietIsError, const String &listenPrompt);
 bool checkRemoteStopRequested();
+String baseNameFromPath(String path);
 void enterDeepSleep();
 
 enum class TeddyState : uint8_t
@@ -366,6 +378,8 @@ unsigned long lastSpeakingFaceMs = 0;
 unsigned long lastRemoteControlPollMs = 0;
 unsigned long lastRemoteControlFailureMs = 0;
 unsigned long lastRemoteDeviceStatusMs = 0;
+unsigned long lastRemoteSdPollMs = 0;
+unsigned long lastRemoteSdFailureMs = 0;
 bool speakerOutputReady = false;
 uint32_t speakerOutputSampleRate = 0;
 bool micInputReady = false;
@@ -2847,6 +2861,305 @@ bool fetchRemoteCommand(RemoteCommand *command, uint32_t timeoutMs = REMOTE_CONT
 #endif
 }
 
+String normalizeRemoteSdPath(String path)
+{
+  path.trim();
+  path.replace('\\', '/');
+  if (path.length() == 0)
+    path = "/";
+  if (!path.startsWith("/"))
+    path = "/" + path;
+  while (path.indexOf("//") >= 0)
+    path.replace("//", "/");
+  if (path.indexOf("..") >= 0)
+    return "/";
+  if (path.length() > 1 && path.endsWith("/"))
+    path.remove(path.length() - 1);
+  return path;
+}
+
+String joinRemoteSdPath(const String &dir, String name)
+{
+  name.replace('\\', '/');
+  int slash = name.lastIndexOf('/');
+  if (slash >= 0)
+    name = name.substring(slash + 1);
+  name.trim();
+  if (name.length() == 0 || name.indexOf("..") >= 0)
+    return "";
+  String base = normalizeRemoteSdPath(dir);
+  if (base == "/")
+    return "/" + name;
+  return base + "/" + name;
+}
+
+bool ensureRemoteSdDirectory(String dir)
+{
+  dir = normalizeRemoteSdPath(dir);
+  if (dir == "/" || SD.exists(dir))
+    return true;
+
+  String current = "";
+  int start = 1;
+  while (start < dir.length())
+  {
+    int slash = dir.indexOf('/', start);
+    String part = slash >= 0 ? dir.substring(start, slash) : dir.substring(start);
+    current += "/" + part;
+    if (!SD.exists(current) && !SD.mkdir(current))
+      return false;
+    if (slash < 0)
+      break;
+    start = slash + 1;
+  }
+  return SD.exists(dir);
+}
+
+String remoteSdListJson(String dirPath)
+{
+  String dir = normalizeRemoteSdPath(dirPath);
+  File root = SD.open(dir, FILE_READ);
+  if (!root || !root.isDirectory())
+  {
+    if (root)
+      root.close();
+    return "{\"ok\":false,\"detail\":\"Folder unavailable\",\"data\":{\"path\":\"" + jsonEscapeValue(dir) + "\",\"items\":[]}}";
+  }
+
+  String json;
+  json.reserve(4096);
+  json += "{\"path\":\"";
+  json += jsonEscapeValue(dir);
+  json += "\",\"sdcard_active\":true,\"source\":\"cloud\",\"items\":[";
+
+  bool first = true;
+  while (true)
+  {
+    File entry = root.openNextFile();
+    if (!entry)
+      break;
+
+    String name = baseNameFromPath(String(entry.name()));
+    if (name.length() > 0)
+    {
+      if (!first)
+        json += ",";
+      first = false;
+      json += "{\"name\":\"";
+      json += jsonEscapeValue(name);
+      json += "\",\"path\":\"";
+      json += jsonEscapeValue(joinRemoteSdPath(dir, name));
+      json += "\",\"type\":\"";
+      json += entry.isDirectory() ? "directory" : "file";
+      json += "\",\"size\":";
+      json += String((uint32_t)entry.size());
+      json += ",\"modified\":\"\",\"editable\":false}";
+    }
+    entry.close();
+  }
+  root.close();
+  json += "]}";
+  return "{\"ok\":true,\"detail\":\"\",\"data\":" + json + "}";
+}
+
+bool postRemoteSdResult(const String &id, const String &action, bool ok, const String &detail, const String &dataJson = "{}")
+{
+  if (WiFi.status() != WL_CONNECTED || id.length() == 0)
+    return false;
+
+  String body;
+  body.reserve(256 + dataJson.length());
+  body += "{\"id\":\"" + jsonEscapeValue(id) + "\",";
+  body += "\"action\":\"" + jsonEscapeValue(action) + "\",";
+  body += "\"ok\":";
+  body += ok ? "true" : "false";
+  body += ",\"detail\":\"" + jsonEscapeValue(detail) + "\",";
+  body += "\"data\":";
+  body += dataJson.length() ? dataJson : "{}";
+  body += "}";
+
+  HTTPClient http;
+  ChatNetworkClient client;
+  prepareChatClient(client, REMOTE_SD_TIMEOUT_MS);
+  if (!http.begin(client, buildServerUrl(REMOTE_SD_RESULT_PATH)))
+  {
+    client.stop();
+    return false;
+  }
+  http.setTimeout(REMOTE_SD_TIMEOUT_MS);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(body);
+  http.end();
+  client.stop();
+  return code == HTTP_CODE_OK;
+}
+
+bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath)
+{
+  HTTPClient http;
+  ChatNetworkClient client;
+  prepareChatClient(client, REMOTE_SD_UPLOAD_TIMEOUT_MS);
+  String url = buildServerUrl(downloadPath.c_str());
+  if (!http.begin(client, url))
+  {
+    client.stop();
+    return false;
+  }
+
+  http.setTimeout(REMOTE_SD_UPLOAD_TIMEOUT_MS);
+  int code = http.GET();
+  if (code != HTTP_CODE_OK)
+  {
+    http.end();
+    client.stop();
+    return false;
+  }
+
+  if (SD.exists(targetPath))
+    SD.remove(targetPath);
+  File output = SD.open(targetPath, FILE_WRITE);
+  if (!output)
+  {
+    http.end();
+    client.stop();
+    return false;
+  }
+
+  WiFiClient *stream = http.getStreamPtr();
+  uint8_t *buffer = (uint8_t *)allocPlaybackBytes(PLAYBACK_NET_BUFFER_BYTES, "remote sd upload buffer");
+  if (!buffer)
+  {
+    output.close();
+    http.end();
+    client.stop();
+    return false;
+  }
+
+  int contentLength = http.getSize();
+  int remaining = contentLength;
+  unsigned long lastDataMs = millis();
+  while (http.connected() && (remaining > 0 || contentLength < 0))
+  {
+    updateStatusLeds();
+    size_t available = stream->available();
+    if (available)
+    {
+      size_t want = min(available, (size_t)PLAYBACK_NET_BUFFER_BYTES);
+      int readNow = stream->readBytes(buffer, want);
+      if (readNow > 0)
+      {
+        output.write(buffer, readNow);
+        if (remaining > 0)
+          remaining -= readNow;
+        lastDataMs = millis();
+      }
+    }
+    else if (millis() - lastDataMs > REMOTE_SD_TIMEOUT_MS)
+      break;
+    delay(1);
+  }
+
+  free(buffer);
+  output.close();
+  http.end();
+  client.stop();
+  return contentLength < 0 || remaining <= 0;
+}
+
+bool handleRemoteSdRequest(const JsonObject &request)
+{
+  String id = request["id"] | "";
+  String action = request["action"] | "";
+  JsonObject payload = request["payload"].as<JsonObject>();
+  action.trim();
+  action.toLowerCase();
+
+  if (!sdReady)
+    return postRemoteSdResult(id, action, false, "SD card is not ready");
+
+  if (action == "bible_status")
+  {
+    String status = localBible.statusJson();
+    return postRemoteSdResult(id, action, true, "", status);
+  }
+
+  if (action == "list")
+  {
+    String result = remoteSdListJson(payload["path"] | "/");
+    bool ok = result.indexOf("\"ok\":true") >= 0;
+    int dataIndex = result.indexOf("\"data\":");
+    String dataJson = dataIndex >= 0 ? result.substring(dataIndex + 7, result.length() - 1) : "{}";
+    return postRemoteSdResult(id, action, ok, ok ? "" : "Folder unavailable", dataJson);
+  }
+
+  if (action == "mkdir")
+  {
+    String dir = payload["path"] | "/";
+    String name = payload["name"] | "";
+    String target = joinRemoteSdPath(dir, name);
+    bool ok = target.length() > 0 && ensureRemoteSdDirectory(target);
+    return postRemoteSdResult(id, action, ok, ok ? "Folder ready" : "Could not create folder", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+  }
+
+  if (action == "upload")
+  {
+    String dir = payload["path"] | "/";
+    String name = payload["name"] | "";
+    String downloadPath = payload["download_path"] | "";
+    String target = joinRemoteSdPath(dir, name);
+    bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target);
+    return postRemoteSdResult(id, action, ok, ok ? "Uploaded to SD" : "Upload to SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+  }
+
+  return postRemoteSdResult(id, action, false, "Unsupported SD action");
+}
+
+bool handleRemoteSdRelay()
+{
+#if !REMOTE_CONTROL_ENABLED
+  return false;
+#else
+  unsigned long now = millis();
+  if (now - lastRemoteSdPollMs < REMOTE_SD_POLL_MS)
+    return false;
+  if (lastRemoteSdFailureMs > 0 && now - lastRemoteSdFailureMs < REMOTE_CONTROL_FAILURE_BACKOFF_MS)
+    return false;
+  lastRemoteSdPollMs = now;
+
+  if (WiFi.status() != WL_CONNECTED)
+    return false;
+
+  HTTPClient http;
+  ChatNetworkClient client;
+  prepareChatClient(client, REMOTE_SD_TIMEOUT_MS);
+  if (!http.begin(client, buildServerUrl(REMOTE_SD_NEXT_PATH)))
+  {
+    client.stop();
+    return false;
+  }
+  http.setTimeout(REMOTE_SD_TIMEOUT_MS);
+  int code = http.GET();
+  String response = http.getString();
+  http.end();
+  client.stop();
+
+  if (code != HTTP_CODE_OK || response.length() == 0)
+  {
+    lastRemoteSdFailureMs = now;
+    return false;
+  }
+  lastRemoteSdFailureMs = 0;
+
+  DynamicJsonDocument doc(2048);
+  DeserializationError error = deserializeJson(doc, response);
+  if (error || doc["request"].isNull())
+    return false;
+
+  JsonObject request = doc["request"].as<JsonObject>();
+  return handleRemoteSdRequest(request);
+#endif
+}
+
 bool checkRemoteStopRequested()
 {
 #if !REMOTE_CONTROL_ENABLED
@@ -4066,6 +4379,7 @@ void loop()
   logTouchDiagnostics();
   handleSDFileManager();
   reportRemoteDeviceStatus();
+  handleRemoteSdRelay();
   if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
   {
     setIdleState();

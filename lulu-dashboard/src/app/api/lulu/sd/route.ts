@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { LULU_API_BASE_URL } from "@/lib/lulu-api";
 
 const DEFAULT_LULU_SD_URL = process.env.NEXT_PUBLIC_LULU_SD_URL ?? "http://192.168.43.73";
 const execFileAsync = promisify(execFile);
@@ -82,6 +83,16 @@ async function fetchFromSd(baseUrl: string, path: string, init?: RequestInit, ti
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${baseUrl}${path}`, { ...init, cache: "no-store", signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchFromCloudSd(path: string, init?: RequestInit, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${LULU_API_BASE_URL}${path}`, { ...init, cache: "no-store", signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }
@@ -169,8 +180,33 @@ export async function GET(request: Request) {
   const action = searchParams.get("action") ?? "list";
   const baseUrl = cleanBaseUrl(searchParams.get("baseUrl"));
   const path = cleanPath(searchParams.get("path"));
+  const mode = searchParams.get("mode") ?? "";
 
   try {
+    if (mode === "cloud") {
+      if (action === "bible_status") {
+        const response = await fetchFromCloudSd("/remote/sd/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "bible_status", timeout_seconds: 18 })
+        }, 30000);
+        const data = await response.json().catch(() => ({}));
+        return NextResponse.json(data.data ?? data, { status: response.status });
+      }
+
+      if (action === "list") {
+        const response = await fetchFromCloudSd("/remote/sd/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "list", path, timeout_seconds: 18 })
+        }, 30000);
+        const data = await response.json().catch(() => ({}));
+        return NextResponse.json(data.data ?? data, { status: response.status });
+      }
+
+      return NextResponse.json({ detail: "Cloud SD mode does not support this action yet" }, { status: 400 });
+    }
+
     if (action === "bible_status") {
       const response = await fetchFromSd(baseUrl, "/bible/status");
       const data = await response.json().catch(() => ({}));
@@ -210,6 +246,7 @@ export async function POST(request: Request) {
   try {
     if (contentType.includes("multipart/form-data")) {
       const incoming = await request.formData();
+      const mode = String(incoming.get("mode") ?? "");
       const baseUrl = cleanBaseUrl(String(incoming.get("baseUrl") ?? ""));
       const path = cleanPath(String(incoming.get("path") ?? ""));
       let uploaded = 0;
@@ -217,6 +254,24 @@ export async function POST(request: Request) {
         if (typeof file === "object" && file && "arrayBuffer" in file) {
           const upload = file as File;
           const target = splitUploadPath(path, upload.name);
+
+          if (mode === "cloud") {
+            const outgoing = new FormData();
+            outgoing.append("action", "upload");
+            outgoing.append("path", target.dir);
+            outgoing.append("file", upload, target.name);
+            const queued = await fetchFromCloudSd("/remote/sd/request", {
+              method: "POST",
+              body: outgoing
+            }, 300000);
+            const queuedData = await queued.json().catch(() => ({}));
+            if (!queued.ok) {
+              return NextResponse.json(queuedData, { status: queued.status });
+            }
+            uploaded += 1;
+            continue;
+          }
+
           await ensureSdDirectory(baseUrl, target.dir);
           const outgoing = new FormData();
           if (isMusicPath(path)) {
@@ -255,6 +310,21 @@ export async function POST(request: Request) {
     const action = String(body.action ?? "");
     const dir = cleanPath(String(body.dir ?? ""));
     const path = cleanPath(String(body.path ?? ""));
+    const mode = String(body.mode ?? "");
+
+    if (mode === "cloud") {
+      if (action === "folder") {
+        const response = await fetchFromCloudSd("/remote/sd/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "mkdir", path: dir, name: String(body.name ?? ""), timeout_seconds: 18 })
+        }, 30000);
+        const data = await response.json().catch(() => ({}));
+        return NextResponse.json(data.data ?? data, { status: response.status });
+      }
+
+      return NextResponse.json({ detail: "Cloud SD mode does not support this action yet" }, { status: 400 });
+    }
 
     if (action === "delete") {
       const response = await fetchFromSd(baseUrl, "/delete", {

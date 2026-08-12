@@ -1,5 +1,6 @@
 import logging
 import hashlib
+import json
 import math
 import os
 import random
@@ -919,6 +920,7 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 # from writing that file at the same time.
 reply_lock = threading.Lock()
 remote_command_lock = threading.Lock()
+remote_sd_lock = threading.Lock()
 
 
 def public_url(path: str) -> str:
@@ -2333,6 +2335,90 @@ def save_remote_device_status(payload: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+def _remote_sd_state() -> dict[str, Any]:
+    state = storage.load_json("dashboard/remote_sd.json", {})
+    if not isinstance(state, dict):
+        state = {}
+    if not isinstance(state.get("pending"), list):
+        state["pending"] = []
+    if not isinstance(state.get("results"), dict):
+        state["results"] = {}
+    return state
+
+
+def _save_remote_sd_state(state: dict[str, Any]) -> None:
+    storage.save_json("dashboard/remote_sd.json", state)
+
+
+def _remote_sd_upload_dir(request_id: str) -> Path:
+    return storage.get_data_path("dashboard/remote_sd_uploads") / request_id
+
+
+def _safe_remote_file_name(value: str) -> str:
+    clean = Path(str(value or "upload.bin").replace("\\", "/")).name
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "_", clean).strip("._")
+    return clean or "upload.bin"
+
+
+def _clean_remote_sd_path(value: str) -> str:
+    parts = [
+        part
+        for part in str(value or "").replace("\\", "/").split("/")
+        if part and part not in {".", ".."}
+    ]
+    return "/" + "/".join(parts)
+
+
+def _queue_remote_sd_request(action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    request = {
+        "id": uuid.uuid4().hex,
+        "action": action,
+        "payload": payload or {},
+        "created_at": str(int(time.time())),
+    }
+    with remote_sd_lock:
+        state = _remote_sd_state()
+        pending = state["pending"]
+        pending.append(request)
+        state["pending"] = pending[-40:]
+        _save_remote_sd_state(state)
+    return request
+
+
+def _remote_sd_result(request_id: str) -> dict[str, Any] | None:
+    with remote_sd_lock:
+        state = _remote_sd_state()
+        result = state["results"].get(request_id)
+    return result if isinstance(result, dict) else None
+
+
+def _wait_remote_sd_result(request_id: str, timeout_seconds: float = 12.0) -> dict[str, Any] | None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        result = _remote_sd_result(request_id)
+        if result:
+            return result
+        time.sleep(0.25)
+    return None
+
+
+def _prune_remote_sd_uploads(active_request_ids: set[str]) -> None:
+    root = storage.get_data_path("dashboard/remote_sd_uploads")
+    if not root.exists():
+        return
+
+    now = time.time()
+    for child in root.iterdir():
+        if not child.is_dir() or child.name in active_request_ids:
+            continue
+        try:
+            age_seconds = now - child.stat().st_mtime
+            if age_seconds > 3600:
+                shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def format_weather_number(value) -> str:
     """Keep spoken weather values short and natural."""
     try:
@@ -3051,6 +3137,126 @@ async def update_remote_device_status(request: Request) -> JSONResponse:
 
     status = save_remote_device_status(payload if isinstance(payload, dict) else {})
     return JSONResponse({"ok": True, "device_status": status})
+
+
+@app.post("/remote/sd/request")
+async def enqueue_remote_sd_request(request: Request) -> JSONResponse:
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        action = str(form.get("action") or "").strip().lower()
+        if action != "upload":
+            raise HTTPException(status_code=400, detail="Unsupported SD form action")
+
+        target_dir = _clean_remote_sd_path(str(form.get("path") or "/"))
+        upload = form.get("file")
+        if not upload or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="Missing upload file")
+
+        original_name = _safe_remote_file_name(getattr(upload, "filename", "") or "upload.bin")
+        queued = _queue_remote_sd_request("upload", {"path": target_dir, "name": original_name})
+        upload_dir = _remote_sd_upload_dir(queued["id"])
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / original_name
+        size = 0
+        with upload_path.open("wb") as output:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                output.write(chunk)
+
+        queued["payload"]["size"] = size
+        queued["payload"]["download_path"] = f"/remote/sd/file/{queued['id']}/{quote(original_name)}"
+        with remote_sd_lock:
+            state = _remote_sd_state()
+            for index, pending in enumerate(state["pending"]):
+                if pending.get("id") == queued["id"]:
+                    state["pending"][index] = queued
+                    break
+            _save_remote_sd_state(state)
+
+        return JSONResponse({"queued": True, "request": queued})
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action not in {"bible_status", "list", "mkdir"}:
+        raise HTTPException(status_code=400, detail="Unsupported SD action")
+
+    request_payload: dict[str, Any] = {}
+    if action in {"list", "mkdir"}:
+        request_payload["path"] = _clean_remote_sd_path(str(payload.get("path") or "/"))
+    if action == "mkdir":
+        request_payload["name"] = _safe_remote_file_name(str(payload.get("name") or "folder"))
+
+    queued = _queue_remote_sd_request(action, request_payload)
+    result = _wait_remote_sd_result(queued["id"], float(payload.get("timeout_seconds") or 12))
+    if result:
+        status_code = 200 if result.get("ok", True) else 502
+        return JSONResponse(result, status_code=status_code)
+    return JSONResponse({"queued": True, "request": queued, "detail": "Waiting for LULU to sync SD data"}, status_code=202)
+
+
+@app.get("/remote/sd/next")
+def get_next_remote_sd_request(device_id: str = "esp32-lulu") -> JSONResponse:
+    with remote_sd_lock:
+        state = _remote_sd_state()
+        request = state["pending"].pop(0) if state["pending"] else None
+        state["last_request"] = {**request, "device_id": device_id, "delivered_at": str(int(time.time()))} if request else state.get("last_request")
+        active_ids = {str(item.get("id")) for item in state["pending"] if isinstance(item, dict)}
+        if request:
+            active_ids.add(str(request.get("id")))
+        _save_remote_sd_state(state)
+
+    _prune_remote_sd_uploads(active_ids)
+    return JSONResponse({"request": request})
+
+
+@app.get("/remote/sd/file/{request_id}/{file_name:path}")
+def get_remote_sd_upload_file(request_id: str, file_name: str) -> Response:
+    safe_name = _safe_remote_file_name(file_name)
+    path = _remote_sd_upload_dir(_safe_remote_file_name(request_id)) / safe_name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Queued SD upload file not found")
+    return StreamingResponse(path.open("rb"), media_type="application/octet-stream")
+
+
+@app.post("/remote/sd/result")
+async def receive_remote_sd_result(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    request_id = str(payload.get("id") or "").strip()
+    if not request_id:
+        raise HTTPException(status_code=400, detail="Missing SD request id")
+
+    result = {
+        "id": request_id,
+        "ok": bool(payload.get("ok", True)),
+        "action": str(payload.get("action") or ""),
+        "detail": str(payload.get("detail") or ""),
+        "data": payload.get("data") if isinstance(payload.get("data"), dict) else {},
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    with remote_sd_lock:
+        state = _remote_sd_state()
+        results = state["results"]
+        results[request_id] = result
+        if len(results) > 80:
+            for key in list(results.keys())[:-80]:
+                results.pop(key, None)
+        state["results"] = results
+        state["last_result"] = result
+        _save_remote_sd_state(state)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/bible/status")
