@@ -91,6 +91,54 @@ function isMusicPath(value: string) {
   return cleanPath(value).toLowerCase() === "/music";
 }
 
+function cleanRelativePath(value: string) {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+}
+
+function splitUploadPath(basePath: string, fileName: string) {
+  const safeName = cleanRelativePath(fileName) || "upload.bin";
+  const parts = safeName.split("/");
+  const name = parts.pop() || "upload.bin";
+  const base = cleanPath(basePath);
+  const baseWithoutSlash = base.replace(/^\/|\/$/g, "");
+  let relativeDir = parts.join("/");
+
+  if (baseWithoutSlash && (relativeDir === baseWithoutSlash || relativeDir.startsWith(`${baseWithoutSlash}/`))) {
+    relativeDir = relativeDir.slice(baseWithoutSlash.length).replace(/^\/+/, "");
+  }
+
+  if (baseWithoutSlash.toLowerCase() === "lulu/bible") {
+    const lowerRelativeDir = relativeDir.toLowerCase();
+    if (lowerRelativeDir === "bible" || lowerRelativeDir.startsWith("bible/")) {
+      relativeDir = relativeDir.slice("bible".length).replace(/^\/+/, "");
+    } else if (lowerRelativeDir === "lulu/bible" || lowerRelativeDir.startsWith("lulu/bible/")) {
+      relativeDir = relativeDir.slice("lulu/bible".length).replace(/^\/+/, "");
+    }
+  }
+
+  const dir = cleanPath([baseWithoutSlash, relativeDir].filter(Boolean).join("/"));
+  return { dir, name };
+}
+
+async function ensureSdDirectory(baseUrl: string, dir: string) {
+  const parts = cleanPath(dir).split("/").filter(Boolean);
+  let current = "";
+
+  for (const part of parts) {
+    const parent = cleanPath(current);
+    await fetchFromSd(baseUrl, "/mkdir", {
+      method: "POST",
+      body: new URLSearchParams({ dir: parent, name: part })
+    });
+    current = cleanPath(`${current}/${part}`);
+  }
+}
+
 function safeAudioBaseName(fileName: string) {
   const parsed = path.parse(fileName.replace(/\\/g, "/"));
   return (parsed.name || "song").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "song";
@@ -164,10 +212,13 @@ export async function POST(request: Request) {
       const incoming = await request.formData();
       const baseUrl = cleanBaseUrl(String(incoming.get("baseUrl") ?? ""));
       const path = cleanPath(String(incoming.get("path") ?? ""));
-      const outgoing = new FormData();
+      let uploaded = 0;
       for (const file of incoming.getAll("files")) {
         if (typeof file === "object" && file && "arrayBuffer" in file) {
           const upload = file as File;
+          const target = splitUploadPath(path, upload.name);
+          await ensureSdDirectory(baseUrl, target.dir);
+          const outgoing = new FormData();
           if (isMusicPath(path)) {
             try {
               const converted = await convertMusicUploadToWav(upload);
@@ -179,15 +230,24 @@ export async function POST(request: Request) {
               );
             }
           } else {
-            outgoing.append("upload", upload, upload.name);
+            outgoing.append("upload", upload, target.name);
           }
+
+          const response = await fetchFromSd(baseUrl, `/upload?dir=${encodeURIComponent(target.dir)}`, {
+            method: "POST",
+            body: outgoing
+          }, 300000);
+
+          if (!response.ok) {
+            return NextResponse.json(
+              { detail: `Could not upload ${target.name} to ${target.dir}`, status: response.status, count: uploaded },
+              { status: response.status }
+            );
+          }
+          uploaded += 1;
         }
       }
-      const response = await fetchFromSd(baseUrl, `/upload?dir=${encodeURIComponent(path)}`, {
-        method: "POST",
-        body: outgoing
-      }, 300000);
-      return NextResponse.json({ ok: response.ok, status: response.status }, { status: response.ok ? 200 : response.status });
+      return NextResponse.json({ ok: true, count: uploaded });
     }
 
     const body = await request.json().catch(() => ({}));
