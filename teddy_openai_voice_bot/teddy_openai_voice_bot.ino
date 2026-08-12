@@ -18,8 +18,13 @@
 #include "arduino_secrets.h"
 #include "LedManager.h"
 #include "SDFileManager.h"
+#include "LocalBibleService.h"
 // Reminder integration: isolated DS3231/SD reminder plugin.
 #include "ReminderManager.h"
+
+#if defined(ENABLE_BIBLE_MP3_HELIX) && ENABLE_BIBLE_MP3_HELIX
+#include "MP3DecoderHelix.h"
+#endif
 
 // OLED wiring.
 #define OLED_SDA 17
@@ -292,6 +297,9 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_DEVICE_STATUS_TIMEOUT_MS
 #define REMOTE_DEVICE_STATUS_TIMEOUT_MS 2500
 #endif
+#ifndef ENABLE_BIBLE_MP3_HELIX
+#define ENABLE_BIBLE_MP3_HELIX 0
+#endif
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
@@ -360,6 +368,7 @@ bool connectionErrorActive = false;
 bool connectionErrorNeedsWifi = false;
 // Reminder integration: single manager instance; audio/mic code remains unchanged.
 ReminderManager reminderManager;
+LocalBibleService localBible;
 
 struct WavInfo
 {
@@ -2441,6 +2450,115 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
   return true;
 }
 
+#if ENABLE_BIBLE_MP3_HELIX
+static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t len, void *ref)
+{
+  (void)ref;
+  uint32_t sampleRate = (uint32_t)info.samprate;
+  int channels = max(1, min(2, info.nChans));
+  if (speakerOutputSampleRate != sampleRate)
+    configureAudioOutputRate(sampleRate);
+
+#if AUDIO_OUTPUT_MODE == AUDIO_OUTPUT_I2S
+  size_t bytesWritten = 0;
+  i2s_write(I2S_NUM_1, pcmBuffer, len * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(I2S_WRITE_TIMEOUT_MS));
+#else
+  for (size_t i = 0; i < len; i += channels)
+  {
+    int16_t sample = pcmBuffer[i];
+    if (channels == 2 && i + 1 < len)
+      sample = (int16_t)(((int32_t)sample + (int32_t)pcmBuffer[i + 1]) / 2);
+    playSamplePWM(sample, sampleRate);
+  }
+#endif
+}
+#endif
+
+bool playLocalMp3File(const String &path, const String &label)
+{
+#if ENABLE_BIBLE_MP3_HELIX
+  File file = SD.open(path, FILE_READ);
+  if (!file)
+  {
+    lastServerError = "Could not open local MP3";
+    return false;
+  }
+
+  lastPlaybackStoppedByButton = false;
+  showWrapped("Bible", label);
+  setSpeakingState();
+  libhelix::MP3DecoderHelix decoder(bibleMp3PcmCallback);
+  decoder.begin();
+
+  uint8_t *buffer = (uint8_t *)allocPlaybackBytes(PLAYBACK_NET_BUFFER_BYTES, "local mp3 buffer");
+  if (!buffer)
+  {
+    file.close();
+    lastServerError = "No MP3 buffer";
+    return false;
+  }
+
+  bool stopButtonArmed = !isTalkButtonPressedRaw();
+  unsigned long stopButtonPressedSinceMs = 0;
+  bool ok = true;
+
+  while (file.available() > 0)
+  {
+    updateStatusLeds();
+    if (checkRemoteStopRequested() ||
+        playbackTouchStopRequested(true, &stopButtonArmed, &stopButtonPressedSinceMs, TOUCH_PLAYBACK_STOP_HOLD_MS))
+    {
+      lastPlaybackStoppedByButton = true;
+      break;
+    }
+
+    size_t want = min((size_t)file.available(), (size_t)PLAYBACK_NET_BUFFER_BYTES);
+    int readNow = file.read(buffer, want);
+    if (readNow <= 0)
+    {
+      ok = false;
+      lastServerError = "MP3 SD read failed";
+      break;
+    }
+    decoder.write(buffer, (size_t)readNow);
+    delay(1);
+  }
+
+  decoder.end();
+  free(buffer);
+  file.close();
+  stopAudioOutput();
+  setIdleState();
+  return ok || lastPlaybackStoppedByButton;
+#else
+  (void)path;
+  (void)label;
+  lastServerError = "MP3 decoder library missing";
+  return false;
+#endif
+}
+
+bool playLocalBibleChapter(const String &requestText)
+{
+  LocalBibleChapter chapter;
+  if (!localBible.resolveReference(requestText, chapter))
+  {
+    lastServerError = localBible.lastError();
+    return false;
+  }
+
+  Serial.printf("[BIBLE] Playing from SD: %s %03d %s\n",
+                chapter.bookCode.c_str(),
+                chapter.chapter,
+                chapter.path.c_str());
+  return playLocalMp3File(chapter.path, chapter.bookName + " " + String(chapter.chapter));
+}
+
+String localBibleStatusJson()
+{
+  return localBible.statusJson();
+}
+
 bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
 {
   *audioUrlOut = "";
@@ -3653,6 +3771,29 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
     return false;
   }
 
+  if (reply.action == "bible")
+  {
+    String bibleRequest = reply.transcription.length() > 0 ? reply.transcription : reply.text;
+    if (playLocalBibleChapter(bibleRequest))
+    {
+      if (lastPlaybackStoppedByButton)
+      {
+        lastStopRequested = true;
+        return false;
+      }
+      return true;
+    }
+
+    Serial.println("[BIBLE] Local playback unavailable: " + lastServerError);
+    String friendly = sdReady
+                          ? "I can't find that Bible chapter on my SD card."
+                          : "I can't access my Bible right now. Please check my SD card.";
+    if (lastServerError.indexOf("decoder") >= 0)
+      friendly = "I found the Bible chapter, but my MP3 player is not ready yet.";
+    speakText(friendly);
+    return false;
+  }
+
   if (reply.action == "wake")
   {
     if (playWakeResponseFromSD())
@@ -3886,6 +4027,8 @@ void setup()
 
   initMic();
   initSDCard();
+  localBible.begin(sdReady);
+  setBibleStatusProvider(localBibleStatusJson);
   // Reminder integration: DS3231 shares the OLED I2C bus on GPIO17/GPIO18.
   reminderManager.begin(Wire, sdReady);
   connectWiFi();

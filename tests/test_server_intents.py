@@ -40,6 +40,11 @@ class IntentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(server.extract_bible_reference(text), expected)
 
+    def test_bible_chapter_audio_extraction_is_chapter_only(self):
+        self.assertEqual(server.extract_bible_chapter_request("genesis 1"), ("genesis", 1))
+        self.assertIsNone(server.extract_bible_chapter_request("john 3:16"))
+        self.assertIsNone(server.extract_bible_chapter_request(server.BIBLE_RANDOM_REFERENCE))
+
     def test_volume_phrases(self):
         self.assertTrue(server.is_volume_down_request("reduce volume"))
         self.assertTrue(server.is_volume_down_request("Lulu reduce volume"))

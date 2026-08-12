@@ -32,14 +32,19 @@ static bool storageSdReady = false;
 static bool pendingWifiReconnect = false;
 static String pendingWifiSsid;
 static String pendingWifiPassword;
+static SDFileManagerStatusProvider bibleStatusProvider = nullptr;
 
 static const char *defaultFolders[] = {
+    "/lulu",
     "/Music",
     "/Stories",
     "/Languages",
     "/Images",
     "/Config",
     "/Voices"};
+
+static const char *bibleRootDir = "/lulu/bible";
+static const char *bibleIndexPath = "/lulu/bible/index.json";
 
 static String htmlEscape(const String &value)
 {
@@ -252,6 +257,40 @@ static String contentTypeFor(const String &path)
   if (lower.endsWith(".mp3"))
     return F("audio/mpeg");
   return F("application/octet-stream");
+}
+
+static void ensureBibleFolders()
+{
+  if (!storageSdReady)
+    return;
+  if (!SD.exists("/lulu"))
+    SD.mkdir("/lulu");
+  if (!SD.exists(bibleRootDir))
+    SD.mkdir(bibleRootDir);
+}
+
+static void collectBibleUsage(File dir, uint32_t *files, uint64_t *bytes)
+{
+  if (!dir || !dir.isDirectory())
+    return;
+
+  File entry = dir.openNextFile();
+  while (entry)
+  {
+    if (entry.isDirectory())
+      collectBibleUsage(entry, files, bytes);
+    else
+    {
+      String name = baseNameFromPath(String(entry.name()));
+      if (name.endsWith(".mp3"))
+      {
+        (*files)++;
+        *bytes += entry.size();
+      }
+    }
+    entry.close();
+    entry = dir.openNextFile();
+  }
 }
 
 static void sendRedirect(const String &dir)
@@ -657,6 +696,46 @@ static void handleWifiStatus()
   storageServer.send(200, F("application/json"), json);
 }
 
+static void handleBibleStatus()
+{
+  if (!storageSdReady)
+  {
+    storageServer.send(503, F("application/json"), F("{\"detail\":\"SD card is not ready\"}"));
+    return;
+  }
+
+  ensureBibleFolders();
+  uint32_t files = 0;
+  uint64_t bytes = 0;
+  File dir = SD.open(bibleRootDir, FILE_READ);
+  collectBibleUsage(dir, &files, &bytes);
+  if (dir)
+    dir.close();
+
+  String service = bibleStatusProvider ? bibleStatusProvider() : "{}";
+  if (service.length() < 2)
+    service = "{}";
+  if (service.endsWith("}"))
+    service.remove(service.length() - 1);
+  service += F(",\"sd_root\":\"");
+  service += bibleRootDir;
+  service += F("\",\"index_path\":\"");
+  service += bibleIndexPath;
+  service += F("\",\"mp3_files\":");
+  service += String(files);
+  service += F(",\"storage_used_bytes\":");
+  service += String((uint32_t)min(bytes, (uint64_t)UINT32_MAX));
+  service += F(",\"index_exists\":");
+  service += SD.exists(bibleIndexPath) ? F("true") : F("false");
+  service += '}';
+  storageServer.send(200, F("application/json"), service);
+}
+
+void setBibleStatusProvider(SDFileManagerStatusProvider provider)
+{
+  bibleStatusProvider = provider;
+}
+
 static void applyPendingWifiReconnect()
 {
   if (!pendingWifiReconnect)
@@ -711,6 +790,7 @@ void beginSDFileManager(bool sdAvailable)
   storageServer.on("/wifi/scan", HTTP_GET, handleWifiScan);
   storageServer.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   storageServer.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
+  storageServer.on("/bible/status", HTTP_GET, handleBibleStatus);
   storageServer.enableCORS(true);
   storageServer.begin();
   storageServerRunning = true;

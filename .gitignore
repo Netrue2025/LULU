@@ -35,3 +35,6 @@ tools/piper/
 tools/*.zip
 voices/
 piper-master/
+
+# Generated SD-card Bible import output
+_tmp_bible_import*/

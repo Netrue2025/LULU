@@ -9,9 +9,10 @@ Flow:
 3. `server.py` transcribes locally with Faster-Whisper.
 4. If the child asks about weather, `server.py` checks Open-Meteo for Lagos weather.
 5. If the child asks for a Bible verse or chapter, `server.py` checks bible-api.com.
-6. Otherwise, `server.py` answers from local Q&A and a local fallback. OpenAI is disabled by default for local testing.
-7. Piper creates `audio/reply.wav`.
-8. ESP32 downloads `audio_url` and plays the WAV through the speaker output.
+6. If a full Bible chapter is installed on SD, the ESP32 plays the local MP3 from `/lulu/bible`.
+7. Otherwise, `server.py` answers from local Q&A and a local fallback. OpenAI is disabled by default for local testing.
+8. Piper creates `audio/reply.wav` for normal TTS responses.
+9. ESP32 plays the response through the speaker output.
 
 ## Files
 
@@ -36,6 +37,25 @@ OpenAI is not required for local testing. Leave it off while you build the local
 ```powershell
 python server.py
 ```
+
+## Offline Bible Audio
+
+Bible chapter audio is installed on the ESP32 SD card and played locally as MP3. Railway is not responsible for Bible audio playback.
+
+Prepare a Faith Comes By Hearing Bible MP3 ZIP for the SD card with:
+
+```powershell
+python tools/import_bible.py C:\path\to\bible.zip C:\path\to\sd\lulu\bible
+```
+
+The ESP32 expects:
+
+```text
+/lulu/bible/index.json
+/lulu/bible/<translation>/<BOOK>/<CHAPTER>.mp3
+```
+
+See `docs/BIBLE_OFFLINE.md` for import, validation, troubleshooting, and licensing notes.
 
 ## Whisper Setup
 

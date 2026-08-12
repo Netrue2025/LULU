@@ -639,8 +639,6 @@ tts_manager = TTSManager(
     ffmpeg_timeout_seconds=TTS_FFMPEG_TIMEOUT_SECONDS,
     logger=logger,
 )
-
-
 def warm_piper_voice_model() -> None:
     """Prepare the hosted Piper voice assets before the ESP32 sends its first request."""
     preload = os.getenv("PIPER_PRELOAD_MODEL", "1").strip().lower() not in {
@@ -2140,6 +2138,24 @@ def extract_bible_reference(text: str) -> str | None:
         return None
 
     return f"{book} {location}"
+
+
+def extract_bible_chapter_request(reference: str) -> tuple[str, int] | None:
+    """Return book/chapter only for full-chapter audio requests."""
+    if not reference or reference == BIBLE_RANDOM_REFERENCE or ":" in reference:
+        return None
+
+    book_match = BIBLE_BOOK_PATTERN.search(reference)
+    if not book_match:
+        return None
+
+    book = re.sub(r"\s+", " ", book_match.group(0)).strip()
+    after_book = reference[book_match.end() :]
+    chapter_match = re.match(r"\s*(\d+)\s*$", after_book)
+    if not chapter_match:
+        return None
+
+    return book, int(chapter_match.group(1))
 
 
 def is_bible_question(text: str) -> bool:
