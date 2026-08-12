@@ -22,8 +22,18 @@
 // Reminder integration: isolated DS3231/SD reminder plugin.
 #include "ReminderManager.h"
 
-#if defined(ENABLE_BIBLE_MP3_HELIX) && ENABLE_BIBLE_MP3_HELIX
+#ifndef ENABLE_BIBLE_MP3_HELIX
+#define ENABLE_BIBLE_MP3_HELIX 0
+#endif
+#ifndef __has_include
+#define __has_include(path) 0
+#endif
+
+#if ENABLE_BIBLE_MP3_HELIX && __has_include("MP3DecoderHelix.h")
 #include "MP3DecoderHelix.h"
+#define BIBLE_MP3_HELIX_AVAILABLE 1
+#else
+#define BIBLE_MP3_HELIX_AVAILABLE 0
 #endif
 
 // OLED wiring.
@@ -297,10 +307,6 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_DEVICE_STATUS_TIMEOUT_MS
 #define REMOTE_DEVICE_STATUS_TIMEOUT_MS 2500
 #endif
-#ifndef ENABLE_BIBLE_MP3_HELIX
-#define ENABLE_BIBLE_MP3_HELIX 0
-#endif
-
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 #if defined(FSPI)
@@ -2450,7 +2456,7 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
   return true;
 }
 
-#if ENABLE_BIBLE_MP3_HELIX
+#if BIBLE_MP3_HELIX_AVAILABLE
 static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t len, void *ref)
 {
   (void)ref;
@@ -2476,7 +2482,7 @@ static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t l
 
 bool playLocalMp3File(const String &path, const String &label)
 {
-#if ENABLE_BIBLE_MP3_HELIX
+#if BIBLE_MP3_HELIX_AVAILABLE
   File file = SD.open(path, FILE_READ);
   if (!file)
   {
@@ -2533,7 +2539,11 @@ bool playLocalMp3File(const String &path, const String &label)
 #else
   (void)path;
   (void)label;
-  lastServerError = "MP3 decoder library missing";
+#if ENABLE_BIBLE_MP3_HELIX
+  lastServerError = "MP3DecoderHelix.h is missing from Arduino libraries";
+#else
+  lastServerError = "MP3 playback disabled";
+#endif
   return false;
 #endif
 }
