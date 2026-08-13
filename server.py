@@ -2345,13 +2345,23 @@ def read_remote_device_status() -> dict[str, Any] | None:
 
 
 def save_remote_device_status(payload: dict[str, Any]) -> dict[str, Any]:
+    def payload_int(key: str, default: int = 0) -> int:
+        try:
+            return int(payload.get(key) or default)
+        except (TypeError, ValueError):
+            return default
+
     status = {
         "device_id": str(payload.get("device_id") or "esp32-lulu")[:64],
         "wifi_connected": bool(payload.get("wifi_connected")),
         "wifi_ssid": str(payload.get("wifi_ssid") or "")[:64],
         "wifi_ip": str(payload.get("wifi_ip") or "")[:48],
-        "wifi_rssi": int(payload.get("wifi_rssi") or 0),
-        "free_heap": int(payload.get("free_heap") or 0),
+        "wifi_rssi": payload_int("wifi_rssi"),
+        "free_heap": payload_int("free_heap"),
+        "sd_ready": bool(payload.get("sd_ready")),
+        "sd_used_bytes": max(0, payload_int("sd_used_bytes")),
+        "sd_total_bytes": max(0, payload_int("sd_total_bytes")),
+        "sd_free_bytes": max(0, payload_int("sd_free_bytes")),
         "state": str(payload.get("state") or "")[:48],
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }

@@ -109,6 +109,11 @@ export type LuluOverview = {
     wifi_ssid?: string;
     wifi_ip?: string;
     wifi_rssi?: number;
+    free_heap?: number;
+    sd_ready?: boolean;
+    sd_used_bytes?: number;
+    sd_total_bytes?: number;
+    sd_free_bytes?: number;
     updated_at?: string;
     state?: string;
   } | null;

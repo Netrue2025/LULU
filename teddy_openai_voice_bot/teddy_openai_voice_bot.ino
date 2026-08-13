@@ -59,8 +59,12 @@
 #define RECORD_BUTTON_PIN TOUCH_INPUT_PIN
 
 // Touch confirmation beep. By default it plays through the existing audio output.
+#ifndef TOUCH_CONFIRM_BEEP_HZ
 #define TOUCH_CONFIRM_BEEP_HZ 2000
-#define TOUCH_CONFIRM_BEEP_MS 100
+#endif
+#ifndef TOUCH_CONFIRM_BEEP_MS
+#define TOUCH_CONFIRM_BEEP_MS 35
+#endif
 #ifndef TOUCH_BEEP_ACTIVE_BUZZER
 #define TOUCH_BEEP_ACTIVE_BUZZER 0
 #endif
@@ -249,9 +253,15 @@ using ChatNetworkClient = WiFiClient;
 #endif
 
 // Timeouts and retry limits.
-#define WIFI_CONNECT_TIMEOUT_MS 20000
-#define WIFI_RECONNECT_TIMEOUT_MS 15000
-#define SERVER_CONNECT_TIMEOUT_MS 10000
+#ifndef WIFI_CONNECT_TIMEOUT_MS
+#define WIFI_CONNECT_TIMEOUT_MS 12000
+#endif
+#ifndef WIFI_RECONNECT_TIMEOUT_MS
+#define WIFI_RECONNECT_TIMEOUT_MS 8000
+#endif
+#ifndef SERVER_CONNECT_TIMEOUT_MS
+#define SERVER_CONNECT_TIMEOUT_MS 6000
+#endif
 #define SERVER_READ_TIMEOUT_MS 90000
 #define AUDIO_READ_TIMEOUT_MS 45000
 #ifndef RADIO_MAX_PLAY_MS
@@ -268,9 +278,6 @@ using ChatNetworkClient = WiFiClient;
 #endif
 #ifndef TOUCH_DOUBLE_TAP_WINDOW_MS
 #define TOUCH_DOUBLE_TAP_WINDOW_MS 320
-#endif
-#ifndef TOUCH_DOUBLE_TAP_ONLINE_ENABLED
-#define TOUCH_DOUBLE_TAP_ONLINE_ENABLED 0
 #endif
 #ifndef TOUCH_DEBOUNCE_MS
 #define TOUCH_DEBOUNCE_MS 35
@@ -296,10 +303,10 @@ using ChatNetworkClient = WiFiClient;
 #define REMOTE_CONTROL_ENABLED 1
 #endif
 #ifndef REMOTE_CONTROL_POLL_MS
-#define REMOTE_CONTROL_POLL_MS 2000
+#define REMOTE_CONTROL_POLL_MS 3000
 #endif
 #ifndef REMOTE_CONTROL_READ_TIMEOUT_MS
-#define REMOTE_CONTROL_READ_TIMEOUT_MS 1200
+#define REMOTE_CONTROL_READ_TIMEOUT_MS 700
 #endif
 #ifndef REMOTE_CONTROL_FAILURE_BACKOFF_MS
 #define REMOTE_CONTROL_FAILURE_BACKOFF_MS 10000
@@ -311,19 +318,19 @@ using ChatNetworkClient = WiFiClient;
 #define REMOTE_STOP_READ_TIMEOUT_MS 600
 #endif
 #ifndef REMOTE_DEVICE_STATUS_INTERVAL_MS
-#define REMOTE_DEVICE_STATUS_INTERVAL_MS 30000
+#define REMOTE_DEVICE_STATUS_INTERVAL_MS 120000
 #endif
 #ifndef REMOTE_DEVICE_STATUS_TIMEOUT_MS
-#define REMOTE_DEVICE_STATUS_TIMEOUT_MS 2500
+#define REMOTE_DEVICE_STATUS_TIMEOUT_MS 900
 #endif
 #ifndef REMOTE_SD_POLL_MS
-#define REMOTE_SD_POLL_MS 2500
+#define REMOTE_SD_POLL_MS 8000
 #endif
 #ifndef REMOTE_SD_TIMEOUT_MS
 #define REMOTE_SD_TIMEOUT_MS 8000
 #endif
 #ifndef REMOTE_SD_POLL_TIMEOUT_MS
-#define REMOTE_SD_POLL_TIMEOUT_MS 1200
+#define REMOTE_SD_POLL_TIMEOUT_MS 650
 #endif
 #ifndef REMOTE_SD_UPLOAD_TIMEOUT_MS
 #define REMOTE_SD_UPLOAD_TIMEOUT_MS 300000
@@ -609,6 +616,13 @@ String jsonEscapeValue(const String &value)
   return escaped;
 }
 
+String uint64String(uint64_t value)
+{
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value);
+  return String(buffer);
+}
+
 const char *currentStateName()
 {
   switch (currentState)
@@ -639,13 +653,34 @@ void reportRemoteDeviceStatus(bool force = false)
   lastRemoteDeviceStatusMs = now;
 
   String body;
-  body.reserve(220);
+  uint64_t sdTotalBytes = 0;
+  uint64_t sdUsedBytes = 0;
+  uint64_t sdFreeBytes = 0;
+  if (sdReady)
+  {
+    sdTotalBytes = SD.totalBytes();
+    sdUsedBytes = SD.usedBytes();
+    sdFreeBytes = sdTotalBytes > sdUsedBytes ? sdTotalBytes - sdUsedBytes : 0;
+  }
+
+  body.reserve(360);
   body += "{\"device_id\":\"esp32-lulu\",";
   body += "\"wifi_connected\":true,";
   body += "\"wifi_ssid\":\"" + jsonEscapeValue(WiFi.SSID()) + "\",";
   body += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
   body += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
   body += "\"free_heap\":" + String((unsigned long)ESP.getFreeHeap()) + ",";
+  body += "\"sd_ready\":";
+  body += sdReady ? "true," : "false,";
+  body += "\"sd_used_bytes\":";
+  body += uint64String(sdUsedBytes);
+  body += ",";
+  body += "\"sd_total_bytes\":";
+  body += uint64String(sdTotalBytes);
+  body += ",";
+  body += "\"sd_free_bytes\":";
+  body += uint64String(sdFreeBytes);
+  body += ",";
   body += "\"state\":\"" + String(currentStateName()) + "\"}";
 
   HTTPClient http;
@@ -4431,7 +4466,6 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
 bool handleConversation()
 {
   lastStopRequested = false;
-  updateRoomClimate(false);
 
   if (!runConversationTurn(true, "Speak now"))
   {
@@ -4595,8 +4629,9 @@ void loop()
 {
   updateStatusLeds();
   logTouchDiagnostics();
-  handleSDFileManager();
   bool buttonPressed = isRecordButtonPressed();
+  if (!buttonPressed)
+    handleSDFileManager();
 
   if (!buttonPressed)
   {
@@ -4645,7 +4680,31 @@ void loop()
   }
 
   unsigned long pressStartedMs = millis();
-  showText("Touch detected", "Release to talk", "Hold to sleep");
+  unsigned long debounceStartedMs = millis();
+  while (millis() - debounceStartedMs < TOUCH_DEBOUNCE_MS)
+  {
+    updateStatusLeds();
+    delay(2);
+  }
+
+  if (!isRecordButtonPressed())
+  {
+    recordButtonArmed = false;
+    delay(20);
+    return;
+  }
+
+  recordButtonArmed = false;
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    showText("Listening", "Speak now", "Hold stop in playback");
+    handleConversation();
+    delay(80);
+    return;
+  }
+
+  showText("Touch detected", "Release for music", "Hold to sleep");
   while (isRecordButtonPressed())
   {
     if (millis() - pressStartedMs >= TOUCH_LONG_PRESS_MS)
@@ -4654,18 +4713,16 @@ void loop()
       return;
     }
 
-    delay(20);
+    delay(10);
   }
 
   unsigned long pressDurationMs = millis() - pressStartedMs;
-  recordButtonArmed = false;
-  bool allowDoubleTapMusic = WiFi.status() != WL_CONNECTED || TOUCH_DOUBLE_TAP_ONLINE_ENABLED;
-  if (allowDoubleTapMusic && pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
+  if (pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
   {
-    delay(250);
+    delay(80);
     return;
   }
 
-  handleConversation();
-  delay(250);
+  showText("WiFi offline", "Check router", "Double tap music");
+  delay(80);
 }

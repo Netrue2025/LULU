@@ -103,7 +103,8 @@ export function SpiritualPage() {
   const [sending, setSending] = useState(false);
   const [offlineStatus, setOfflineStatus] = useState<BibleOfflineStatus | null>(null);
   const [offlineMessage, setOfflineMessage] = useState("");
-  const [offlineBusy, setOfflineBusy] = useState(false);
+  const [sdStatusBusy, setSdStatusBusy] = useState(true);
+  const [bibleFilesBusy, setBibleFilesBusy] = useState(true);
   const [luluStorageUrl, setLuluStorageUrl] = useState(() =>
     typeof window === "undefined" ? DEFAULT_LULU_STORAGE_URL : window.localStorage.getItem(LULU_STORAGE_URL_KEY) ?? DEFAULT_LULU_STORAGE_URL
   );
@@ -125,11 +126,13 @@ export function SpiritualPage() {
   );
   const bibleFolders = bibleFiles.filter((item) => item.type === "directory");
   const bibleFileItems = bibleFiles.filter((item) => item.type === "file");
-  const sdTotalBytes = offlineStatus?.sd_total_bytes ?? 0;
-  const sdUsedBytes = offlineStatus?.sd_used_bytes ?? offlineStatus?.storage_used_bytes ?? 0;
+  const deviceSd = overview?.device_status;
+  const sdTotalBytes = offlineStatus?.sd_total_bytes ?? deviceSd?.sd_total_bytes ?? 0;
+  const sdUsedBytes = offlineStatus?.sd_used_bytes ?? deviceSd?.sd_used_bytes ?? offlineStatus?.storage_used_bytes ?? 0;
   const sdUsedPercent = sdTotalBytes > 0 ? Math.min(100, Math.max(0, Math.round((sdUsedBytes / sdTotalBytes) * 100))) : 0;
-  const sdReady = Boolean(offlineStatus?.success || sdTotalBytes > 0 || typeof offlineStatus?.index_exists === "boolean");
-  const sdLoading = offlineBusy || !offlineStatus;
+  const sdReady = Boolean(offlineStatus?.success || deviceSd?.sd_ready || sdTotalBytes > 0 || typeof offlineStatus?.index_exists === "boolean");
+  const sdLoading = sdStatusBusy && !sdReady;
+  const offlineBusy = sdStatusBusy || bibleFilesBusy;
 
   useEffect(() => {
     void loadBibleStatus();
@@ -166,7 +169,7 @@ export function SpiritualPage() {
   }
 
   async function loadBibleStatus() {
-    setOfflineBusy(true);
+    setSdStatusBusy(true);
     setOfflineMessage("");
     try {
       const baseUrl = directStorageUrl();
@@ -181,12 +184,12 @@ export function SpiritualPage() {
     } catch (error) {
       setOfflineMessage(error instanceof Error ? error.message : "Offline Bible status unavailable");
     } finally {
-      setOfflineBusy(false);
+      setSdStatusBusy(false);
     }
   }
 
   async function loadBibleFiles(path = biblePath) {
-    setOfflineBusy(true);
+    setBibleFilesBusy(true);
     setOfflineMessage("");
     try {
       const response = await fetch(
@@ -202,7 +205,7 @@ export function SpiritualPage() {
       setBibleFiles([]);
       setOfflineMessage(error instanceof Error ? error.message : "Bible files unavailable");
     } finally {
-      setOfflineBusy(false);
+      setBibleFilesBusy(false);
     }
   }
 
@@ -607,10 +610,10 @@ export function SpiritualPage() {
                       <BookOpen className="h-4 w-4" />
                       Bible
                     </Button>
-                    <Button variant="secondary" disabled={offlineBusy} onClick={() => loadBibleFiles(biblePath)}>
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh
-                  </Button>
+                    <Button variant="secondary" disabled={bibleFilesBusy} onClick={() => loadBibleFiles(biblePath)}>
+                      <RefreshCw className="h-4 w-4" />
+                      Refresh
+                    </Button>
                   </div>
                 </div>
                 <div className="grid gap-2 text-xs md:grid-cols-2 xl:grid-cols-3">
@@ -638,7 +641,13 @@ export function SpiritualPage() {
                     </button>
                   ))}
                 </div>
-                {!bibleFiles.length ? <p className="rounded-md border border-white/10 bg-white/5 p-3 text-xs text-cyan-100/80">No Bible files found on LULU SD yet.</p> : null}
+                {bibleFilesBusy && !bibleFiles.length ? (
+                  <p className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 p-3 text-xs text-cyan-100/80">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading Bible files from LULU SD
+                  </p>
+                ) : null}
+                {!bibleFilesBusy && !bibleFiles.length ? <p className="rounded-md border border-white/10 bg-white/5 p-3 text-xs text-cyan-100/80">No Bible files found on LULU SD yet.</p> : null}
               </div>
             </div>
           </div>
