@@ -178,6 +178,10 @@ export function SpiritualPage() {
       if (sdMode === "local") params.set("baseUrl", baseUrl);
       const response = await fetch(`/api/lulu/sd?${params.toString()}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
+      if (response.status === 202 || data?.queued) {
+        setOfflineMessage(data.detail ?? "LULU is still syncing SD status.");
+        return;
+      }
       if (!response.ok) throw new Error(data.detail ?? "Offline Bible status unavailable");
       setOfflineStatus(data);
       setOfflineMessage("Offline Bible status loaded.");
@@ -197,6 +201,10 @@ export function SpiritualPage() {
         { cache: "no-store" }
       );
       const data = await response.json().catch(() => ({}));
+      if (response.status === 202 || data?.queued) {
+        setOfflineMessage(data.detail ?? "LULU is still syncing Bible files.");
+        return;
+      }
       if (!response.ok) throw new Error(data.detail ?? "Bible files unavailable");
       setBiblePath(String(data.path ?? path).replace(/^\//, ""));
       setBibleFiles(Array.isArray(data.items) ? data.items : []);

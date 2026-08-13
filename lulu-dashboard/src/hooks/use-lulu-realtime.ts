@@ -2,16 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { initialEvents } from "@/lib/mock-data";
+import { cachedJson } from "@/lib/client-cache";
 import type { ActivityEvent, LuluHealth, LuluOverview, LuluStatus } from "@/lib/types";
 
 type LuluRealtimeOptions = {
   poll?: boolean;
+  pollHealth?: boolean;
+  pollOverview?: boolean;
   healthIntervalMs?: number;
   overviewIntervalMs?: number;
+  healthCacheMs?: number;
+  overviewCacheMs?: number;
 };
 
 export function useLuluRealtime(options: LuluRealtimeOptions = {}) {
-  const { poll = false, healthIntervalMs = 15000, overviewIntervalMs = 4000 } = options;
+  const {
+    poll = false,
+    pollHealth = false,
+    pollOverview = false,
+    healthIntervalMs = 15000,
+    overviewIntervalMs = 5000,
+    healthCacheMs = 15000,
+    overviewCacheMs = 900
+  } = options;
   const [health, setHealth] = useState<LuluHealth | null>(null);
   const [overview, setOverview] = useState<LuluOverview | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>(initialEvents);
@@ -23,9 +36,7 @@ export function useLuluRealtime(options: LuluRealtimeOptions = {}) {
 
     async function loadHealth() {
       try {
-        const response = await fetch("/api/lulu/health", { cache: "no-store" });
-        if (!response.ok) throw new Error(`Health check failed with ${response.status}`);
-        const data = (await response.json()) as LuluHealth;
+        const data = await cachedJson<LuluHealth>("lulu:health", "/api/lulu/health", healthCacheMs);
         if (!cancelled) {
           const healthEvent: ActivityEvent = {
             id: `health-${Date.now()}`,
@@ -59,9 +70,7 @@ export function useLuluRealtime(options: LuluRealtimeOptions = {}) {
 
     async function loadOverview() {
       try {
-        const response = await fetch("/api/lulu/overview", { cache: "no-store" });
-        if (!response.ok) return;
-        const data = (await response.json()) as LuluOverview;
+        const data = await cachedJson<LuluOverview>("lulu:overview", "/api/lulu/overview", overviewCacheMs);
         if (cancelled) return;
         setOverview(data);
         if (data.activities.length > 0) {
@@ -83,14 +92,14 @@ export function useLuluRealtime(options: LuluRealtimeOptions = {}) {
 
     void loadHealth();
     void loadOverview();
-    const healthTimer = poll ? window.setInterval(loadHealth, healthIntervalMs) : undefined;
-    const overviewTimer = poll ? window.setInterval(loadOverview, overviewIntervalMs) : undefined;
+    const healthTimer = poll || pollHealth ? window.setInterval(loadHealth, healthIntervalMs) : undefined;
+    const overviewTimer = poll || pollOverview ? window.setInterval(loadOverview, overviewIntervalMs) : undefined;
     return () => {
       cancelled = true;
       if (healthTimer) window.clearInterval(healthTimer);
       if (overviewTimer) window.clearInterval(overviewTimer);
     };
-  }, [healthIntervalMs, overviewIntervalMs, poll]);
+  }, [healthCacheMs, healthIntervalMs, overviewCacheMs, overviewIntervalMs, poll, pollHealth, pollOverview]);
 
   const status: LuluStatus = useMemo(() => {
     if (loading) return "thinking";

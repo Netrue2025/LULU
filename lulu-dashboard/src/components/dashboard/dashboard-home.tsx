@@ -68,7 +68,12 @@ const defaultWifiConfig: WifiConfig = {
 };
 
 export function DashboardHome() {
-  const { health, overview, events, status } = useLuluRealtime();
+  const { health, overview, events, status } = useLuluRealtime({
+    pollOverview: true,
+    overviewIntervalMs: 5000,
+    overviewCacheMs: 900,
+    healthCacheMs: 30000
+  });
   const [remoteStatus, setRemoteStatus] = useState("");
   const [sendingRemote, setSendingRemote] = useState(false);
   const [connectionOpen, setConnectionOpen] = useState(false);

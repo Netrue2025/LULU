@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import { LULU_API_BASE_URL } from "@/lib/lulu-api";
 
 const startedAt = Date.now();
+const HEALTH_CACHE_MS = 15000;
+let cachedBackendHealth: { data: Record<string, string> | null; online: boolean; expiresAt: number } | null = null;
 
 async function getDiskUsage() {
   try {
@@ -29,17 +31,25 @@ export async function GET() {
   let health: Record<string, string> | null = null;
   let serverOnline = false;
 
-  try {
-    const response = await fetch(`${LULU_API_BASE_URL}/health`, {
-      cache: "no-store",
-      signal: controller.signal
-    });
-    serverOnline = response.ok;
-    health = response.ok ? await response.json() : null;
-  } catch {
-    serverOnline = false;
-  } finally {
+  if (cachedBackendHealth && cachedBackendHealth.expiresAt > Date.now()) {
+    serverOnline = cachedBackendHealth.online;
+    health = cachedBackendHealth.data;
     clearTimeout(timeout);
+  } else {
+    try {
+      const response = await fetch(`${LULU_API_BASE_URL}/health`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+      serverOnline = response.ok;
+      health = response.ok ? await response.json() : null;
+      cachedBackendHealth = { data: health, online: serverOnline, expiresAt: Date.now() + HEALTH_CACHE_MS };
+    } catch {
+      serverOnline = false;
+      cachedBackendHealth = { data: null, online: false, expiresAt: Date.now() + 3000 };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   const totalMemory = os.totalmem();

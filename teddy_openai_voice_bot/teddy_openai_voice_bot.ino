@@ -324,7 +324,7 @@ using ChatNetworkClient = WiFiClient;
 #define REMOTE_DEVICE_STATUS_TIMEOUT_MS 900
 #endif
 #ifndef REMOTE_SD_POLL_MS
-#define REMOTE_SD_POLL_MS 8000
+#define REMOTE_SD_POLL_MS 5000
 #endif
 #ifndef REMOTE_SD_TIMEOUT_MS
 #define REMOTE_SD_TIMEOUT_MS 8000

@@ -267,12 +267,24 @@ export async function POST(request: Request) {
             outgoing.append("action", "upload");
             outgoing.append("path", target.dir);
             outgoing.append("overwrite", overwrite ? "1" : "0");
+            outgoing.append("timeout_seconds", "180");
             outgoing.append("file", upload, target.name);
             const queued = await fetchFromCloudSd("/remote/sd/request", {
               method: "POST",
               body: outgoing
             }, 300000);
             const queuedData = await queued.json().catch(() => ({}));
+            if (queued.status === 202 || queuedData?.queued) {
+              return NextResponse.json(
+                {
+                  detail: `LULU has not confirmed ${target.name} on the SD card yet. Keep LULU powered on and try refresh in a moment.`,
+                  queued: true,
+                  request: queuedData?.request,
+                  count: uploaded
+                },
+                { status: 504 }
+              );
+            }
             if (!queued.ok) {
               return NextResponse.json(queuedData, { status: queued.status });
             }

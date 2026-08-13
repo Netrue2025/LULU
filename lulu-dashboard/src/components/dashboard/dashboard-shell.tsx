@@ -41,10 +41,10 @@ export function DashboardShell({
   unreadAlerts?: number;
   minimal?: boolean;
 }) {
-  const [authed, setAuthed] = useState(false);
-  const [role, setRole] = useState("Admin");
+  const [authed, setAuthed] = useState(() => (typeof window === "undefined" ? false : window.localStorage.getItem("lulu-dashboard-auth") === "true"));
+  const [role, setRole] = useState(() => (typeof window === "undefined" ? "Admin" : window.localStorage.getItem("lulu-dashboard-role") ?? "Admin"));
   const [mobileNav, setMobileNav] = useState(false);
-  const [dark, setDark] = useState(false);
+  const [dark, setDark] = useState(() => (typeof window === "undefined" ? false : (window.localStorage.getItem("lulu-dashboard-theme") ?? "dark") === "dark"));
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
@@ -185,6 +185,7 @@ function SidebarContent({
             <Link
               key={item.href}
               href={item.href}
+              prefetch
               onClick={onNavigate}
               className={cn(
                 "mb-1 flex h-10 items-center gap-3 rounded-md px-3 text-sm transition",

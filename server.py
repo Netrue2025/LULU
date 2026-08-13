@@ -3214,7 +3214,18 @@ async def enqueue_remote_sd_request(request: Request) -> JSONResponse:
                     break
             _save_remote_sd_state(state)
 
-        return JSONResponse({"queued": True, "request": queued})
+        try:
+            timeout_seconds = min(300.0, max(0.0, float(form.get("timeout_seconds") or 0)))
+        except (TypeError, ValueError):
+            timeout_seconds = 0.0
+
+        if timeout_seconds > 0:
+            result = _wait_remote_sd_result(queued["id"], timeout_seconds)
+            if result:
+                status_code = 200 if result.get("ok", True) else 502
+                return JSONResponse(result, status_code=status_code)
+
+        return JSONResponse({"queued": True, "request": queued, "detail": "Waiting for LULU to write the file to SD"}, status_code=202)
 
     try:
         payload = await request.json()
