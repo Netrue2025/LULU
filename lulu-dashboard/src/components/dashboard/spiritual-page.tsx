@@ -38,6 +38,20 @@ type BibleUploadResponse = {
   detail?: string;
 };
 
+type BibleDuplicateChoice = "skip" | "overwrite";
+
+type BibleDuplicatePrompt = {
+  fileName: string;
+  targetPath: string;
+  resolve: (choice: BibleDuplicateChoice) => void;
+};
+
+type BibleUploadTarget = {
+  dir: string;
+  name: string;
+  path: string;
+};
+
 const DEFAULT_LULU_STORAGE_URL = process.env.NEXT_PUBLIC_LULU_SD_URL ?? "http://192.168.43.73";
 const LULU_STORAGE_URL_KEY = "lulu-storage-url";
 const BIBLE_ROOT_PATH = "lulu/bible";
@@ -47,6 +61,33 @@ function formatBytes(value = 0) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function cleanRelativePath(value: string) {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+}
+
+function splitBibleUploadPath(file: File): BibleUploadTarget {
+  const safeName = cleanRelativePath(file.webkitRelativePath || file.name) || "upload.bin";
+  const parts = safeName.split("/");
+  const name = parts.pop() || "upload.bin";
+  const base = cleanRelativePath(BIBLE_ROOT_PATH);
+  let relativeDir = parts.join("/");
+  const lowerRelativeDir = relativeDir.toLowerCase();
+
+  if (lowerRelativeDir === base || lowerRelativeDir.startsWith(`${base}/`)) {
+    relativeDir = relativeDir.slice(base.length).replace(/^\/+/, "");
+  } else if (lowerRelativeDir === "bible" || lowerRelativeDir.startsWith("bible/")) {
+    relativeDir = relativeDir.slice("bible".length).replace(/^\/+/, "");
+  }
+
+  const dir = [base, relativeDir].filter(Boolean).join("/");
+  return { dir, name, path: `/${[dir, name].filter(Boolean).join("/")}` };
 }
 
 export function SpiritualPage() {
@@ -69,6 +110,7 @@ export function SpiritualPage() {
   const [uploadingBible, setUploadingBible] = useState(false);
   const [bibleUploadProgress, setBibleUploadProgress] = useState(0);
   const [bibleUploadPhase, setBibleUploadPhase] = useState("");
+  const [duplicateBiblePrompt, setDuplicateBiblePrompt] = useState<BibleDuplicatePrompt | null>(null);
   const bible = overview?.bible;
   const bibleActivities = useMemo(
     () => (overview?.activities ?? events).filter((item) => /bible|scripture|reading|verse|psalm|proverb/i.test(item.description)).slice(0, 5),
@@ -201,6 +243,37 @@ export function SpiritualPage() {
     });
   }
 
+  function chooseBibleDuplicate(fileName: string, targetPath: string) {
+    return new Promise<BibleDuplicateChoice>((resolve) => {
+      setDuplicateBiblePrompt({ fileName, targetPath, resolve });
+    });
+  }
+
+  function resolveBibleDuplicate(choice: BibleDuplicateChoice) {
+    duplicateBiblePrompt?.resolve(choice);
+    setDuplicateBiblePrompt(null);
+  }
+
+  async function loadBibleDirectoryItems(path: string) {
+    const response = await fetch(
+      `/api/lulu/sd?${new URLSearchParams({ ...Object.fromEntries(sdQueryParams()), action: "list", path }).toString()}`,
+      { cache: "no-store" }
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail ?? `Could not check /${path} on LULU SD`);
+    return Array.isArray(data.items) ? data.items as BibleSdItem[] : [];
+  }
+
+  async function bibleTargetExists(target: BibleUploadTarget, cache: Map<string, BibleSdItem[]>) {
+    const cacheKey = target.dir.toLowerCase();
+    let items = cache.get(cacheKey);
+    if (!items) {
+      items = await loadBibleDirectoryItems(target.dir);
+      cache.set(cacheKey, items);
+    }
+    return items.some((item) => item.type === "file" && item.name.toLowerCase() === target.name.toLowerCase());
+  }
+
   async function uploadBibleFiles() {
     if (!pendingBibleFiles.length) {
       setOfflineMessage("Choose the prepared lulu/bible folder first.");
@@ -212,31 +285,56 @@ export function SpiritualPage() {
     setBibleUploadPhase("Preparing Bible upload");
     setOfflineMessage("");
 
+    let uploaded = 0;
+    let skipped = 0;
+    let processed = 0;
+
     try {
-      let uploaded = 0;
+      const directoryCache = new Map<string, BibleSdItem[]>();
       for (const file of pendingBibleFiles) {
+        const target = splitBibleUploadPath(file);
+        let overwrite = false;
+
+        if (await bibleTargetExists(target, directoryCache)) {
+          setBibleUploadPhase(`Waiting for ${target.name}`);
+          const choice = await chooseBibleDuplicate(target.name, target.path);
+          if (choice === "skip") {
+            skipped += 1;
+            processed += 1;
+            setBibleUploadProgress(Math.round((processed / pendingBibleFiles.length) * 100));
+            setBibleUploadPhase(`Skipped ${target.name}`);
+            continue;
+          }
+          overwrite = true;
+        }
+
         const formData = new FormData();
         formData.append("mode", sdMode);
         if (sdMode === "local") formData.append("baseUrl", directStorageUrl());
         formData.append("path", BIBLE_ROOT_PATH);
+        formData.append("overwrite", overwrite ? "1" : "0");
         formData.append("files", file, file.webkitRelativePath || file.name);
 
-        setBibleUploadProgress(Math.round((uploaded / pendingBibleFiles.length) * 100));
-        setBibleUploadPhase(`Uploading ${uploaded + 1} of ${pendingBibleFiles.length}`);
+        setBibleUploadProgress(Math.round((processed / pendingBibleFiles.length) * 100));
+        setBibleUploadPhase(`Uploading ${processed + 1} of ${pendingBibleFiles.length}`);
         const response = await uploadFormDataWithProgress(formData);
         if (!response.ok) throw new Error(response.data.detail ?? `Bible upload failed at ${file.name}`);
         uploaded += response.data.count ?? 1;
-        setBibleUploadProgress(Math.round((uploaded / pendingBibleFiles.length) * 100));
+        processed += 1;
+        setBibleUploadProgress(Math.round((processed / pendingBibleFiles.length) * 100));
       }
 
-      setOfflineMessage(sdMode === "cloud" ? `Queued ${uploaded} Bible file(s) for LULU SD sync.` : `Uploaded ${uploaded} Bible file(s) to LULU SD.`);
+      const skippedText = skipped ? ` Skipped ${skipped} existing file(s).` : "";
+      setOfflineMessage((sdMode === "cloud" ? `Queued ${uploaded} Bible file(s) for LULU SD sync.` : `Uploaded ${uploaded} Bible file(s) to LULU SD.`) + skippedText);
       setBibleUploadProgress(100);
       setBibleUploadPhase("Upload complete");
       clearBibleFiles(false);
       await loadBibleStatus();
       await loadBibleFiles(BIBLE_ROOT_PATH);
     } catch (error) {
-      setOfflineMessage(error instanceof Error ? error.message : "Bible upload failed");
+      const keptText = uploaded || skipped ? ` ${uploaded} uploaded and ${skipped} skipped before it stopped; those files are kept.` : "";
+      setBibleUploadPhase("Upload stopped");
+      setOfflineMessage((error instanceof Error ? error.message : "Bible upload failed") + keptText);
     } finally {
       setUploadingBible(false);
     }
@@ -511,6 +609,24 @@ export function SpiritualPage() {
           </div>
         </section>
       </PageGrid>
+      {duplicateBiblePrompt ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-white/10 bg-slate-950 p-4 shadow-2xl">
+            <h3 className="text-sm font-semibold text-white">File Already Exists</h3>
+            <p className="mt-2 text-sm font-medium text-white">{duplicateBiblePrompt.fileName}</p>
+            <p className="mt-2 break-all text-xs text-cyan-100/80">{duplicateBiblePrompt.targetPath}</p>
+            <p className="mt-3 text-xs text-cyan-100/80">Choose how to continue this Bible upload.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => resolveBibleDuplicate("skip")}>
+                Skip
+              </Button>
+              <Button onClick={() => resolveBibleDuplicate("overwrite")}>
+                Overwrite
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </DashboardShell>
   );
 }

@@ -121,6 +121,9 @@
 #ifndef MAX_REPLY_SD_WAV_BYTES
 #define MAX_REPLY_SD_WAV_BYTES (10UL * 1024UL * 1024UL)
 #endif
+#ifndef MAX_REPLY_SD_CACHE_FILES
+#define MAX_REPLY_SD_CACHE_FILES 48
+#endif
 #ifndef I2S_WRITE_TIMEOUT_MS
 #define I2S_WRITE_TIMEOUT_MS 2000
 #endif
@@ -229,6 +232,7 @@ using ChatNetworkClient = WiFiClient;
 #define SD_MISO 13
 #define LAST_RECORDING_PATH "/last_recording.wav"
 #define REPLY_DOWNLOAD_PATH "/reply_download.wav"
+#define REPLY_CACHE_DIR "/ReplyCache"
 #define LOCAL_QA_PATH "/local_qa.txt"
 #define MUSIC_DIR "/Music"
 #define STORY_DIR "/Stories"
@@ -264,6 +268,9 @@ using ChatNetworkClient = WiFiClient;
 #endif
 #ifndef TOUCH_DOUBLE_TAP_WINDOW_MS
 #define TOUCH_DOUBLE_TAP_WINDOW_MS 320
+#endif
+#ifndef TOUCH_DOUBLE_TAP_ONLINE_ENABLED
+#define TOUCH_DOUBLE_TAP_ONLINE_ENABLED 0
 #endif
 #ifndef TOUCH_DEBOUNCE_MS
 #define TOUCH_DEBOUNCE_MS 35
@@ -315,6 +322,9 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_SD_TIMEOUT_MS
 #define REMOTE_SD_TIMEOUT_MS 8000
 #endif
+#ifndef REMOTE_SD_POLL_TIMEOUT_MS
+#define REMOTE_SD_POLL_TIMEOUT_MS 1200
+#endif
 #ifndef REMOTE_SD_UPLOAD_TIMEOUT_MS
 #define REMOTE_SD_UPLOAD_TIMEOUT_MS 300000
 #endif
@@ -331,8 +341,10 @@ struct ChatServerReply
   String transcription;
   String text;
   String audioUrl;
+  String audioCacheKey;
   String action;
   String musicQuery;
+  bool audioCacheable;
 };
 
 struct RemoteCommand
@@ -1720,8 +1732,10 @@ bool postWavToServer(const uint8_t *wav, size_t wavBytes, ChatServerReply *reply
   reply->transcription = "";
   reply->text = "";
   reply->audioUrl = "";
+  reply->audioCacheKey = "";
   reply->action = "";
   reply->musicQuery = "";
+  reply->audioCacheable = false;
 
   ChatNetworkClient client;
   if (!connectChatServer(client))
@@ -1819,11 +1833,14 @@ bool postWavToServer(const uint8_t *wav, size_t wavBytes, ChatServerReply *reply
   reply->transcription = doc["transcription"] | "";
   reply->text = doc["text"] | "";
   reply->audioUrl = doc["audio_url"] | "";
+  reply->audioCacheKey = doc["audio_cache_key"] | "";
   reply->action = doc["action"] | "speak";
   reply->musicQuery = doc["music_query"] | "";
+  reply->audioCacheable = doc["audio_cacheable"] | false;
   reply->transcription.trim();
   reply->text.trim();
   reply->audioUrl.trim();
+  reply->audioCacheKey.trim();
   reply->action.trim();
   reply->musicQuery.trim();
 
@@ -1883,7 +1900,116 @@ bool skipStreamBytes(StreamType *stream, size_t length)
   return true;
 }
 
-bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *path)
+String hex8(uint32_t value)
+{
+  char buffer[9];
+  snprintf(buffer, sizeof(buffer), "%08lx", (unsigned long)value);
+  return String(buffer);
+}
+
+uint32_t fnv1aUpdate(uint32_t hash, const String &value)
+{
+  for (uint16_t i = 0; i < value.length(); i++)
+  {
+    hash ^= (uint8_t)value[i];
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+String localReplyAudioCacheKey(const String &prefix, const String &text)
+{
+  uint32_t first = fnv1aUpdate(2166136261UL, prefix + "\n" + text);
+  uint32_t second = fnv1aUpdate(2166136261UL ^ 0x9E3779B9UL, text + "\n" + prefix);
+  return hex8(first) + hex8(second);
+}
+
+String sanitizeReplyAudioCacheKey(String key)
+{
+  key.trim();
+  key.toLowerCase();
+  String clean;
+  clean.reserve(min((uint16_t)48, (uint16_t)key.length()));
+  for (uint16_t i = 0; i < key.length() && clean.length() < 48; i++)
+  {
+    char c = key[i];
+    if (isalnum((unsigned char)c) || c == '_' || c == '-')
+      clean += c;
+  }
+  return clean;
+}
+
+bool ensureReplyCacheDirectory()
+{
+  if (!sdReady)
+    return false;
+  if (SD.exists(REPLY_CACHE_DIR))
+    return true;
+  return SD.mkdir(REPLY_CACHE_DIR);
+}
+
+String replyAudioCachePath(String cacheKey)
+{
+  String clean = sanitizeReplyAudioCacheKey(cacheKey);
+  if (clean.length() == 0)
+    return "";
+  return String(REPLY_CACHE_DIR) + "/" + clean + ".wav";
+}
+
+void pruneReplyAudioCache()
+{
+  if (!sdReady || !SD.exists(REPLY_CACHE_DIR))
+    return;
+
+  File dir = SD.open(REPLY_CACHE_DIR, FILE_READ);
+  if (!dir || !dir.isDirectory())
+  {
+    if (dir)
+      dir.close();
+    return;
+  }
+
+  String removable[MAX_REPLY_SD_CACHE_FILES + 8];
+  uint16_t count = 0;
+  while (true)
+  {
+    File entry = dir.openNextFile();
+    if (!entry)
+      break;
+
+    String name = entry.name();
+    bool isFile = !entry.isDirectory();
+    entry.close();
+
+    name.toLowerCase();
+    if (isFile && name.endsWith(".wav"))
+    {
+      if (count < MAX_REPLY_SD_CACHE_FILES + 8)
+        removable[count] = name;
+      count++;
+    }
+  }
+  dir.close();
+
+  if (count <= MAX_REPLY_SD_CACHE_FILES)
+    return;
+
+  uint16_t removeCount = count - MAX_REPLY_SD_CACHE_FILES;
+  for (uint16_t i = 0; i < removeCount && i < MAX_REPLY_SD_CACHE_FILES + 8; i++)
+  {
+    String name = removable[i];
+    if (name.length() == 0)
+      continue;
+    int slash = name.lastIndexOf('/');
+    if (slash >= 0)
+      name = name.substring(slash + 1);
+    String path = String(REPLY_CACHE_DIR) + "/" + name;
+    SD.remove(path);
+    Serial.println("[AUDIO] Pruned reply cache: " + path);
+  }
+}
+
+bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const String &path)
 {
   if (!sdReady)
     return false;
@@ -1894,8 +2020,11 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
     return false;
   }
 
-  SD.remove(path);
-  File output = SD.open(path, FILE_WRITE);
+  String tempPath = path + ".tmp";
+  if (SD.exists(tempPath))
+    SD.remove(tempPath);
+
+  File output = SD.open(tempPath, FILE_WRITE);
   if (!output)
   {
     lastServerError = "Could not open reply SD cache";
@@ -1931,6 +2060,8 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
         {
           free(buffer);
           output.close();
+          if (SD.exists(tempPath))
+            SD.remove(tempPath);
           lastServerError = "Reply SD write failed";
           return false;
         }
@@ -1941,6 +2072,8 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
         {
           free(buffer);
           output.close();
+          if (SD.exists(tempPath))
+            SD.remove(tempPath);
           lastServerError = "Reply WAV too large for SD cache";
           return false;
         }
@@ -1952,6 +2085,8 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
       {
         free(buffer);
         output.close();
+        if (SD.exists(tempPath))
+          SD.remove(tempPath);
         lastServerError = "Reply SD download timeout";
         return false;
       }
@@ -1963,11 +2098,23 @@ bool downloadHttpStreamToSD(WiFiClient *stream, int contentLength, const char *p
   output.close();
   if (total < 44)
   {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
     lastServerError = "Reply WAV download too small";
     return false;
   }
 
-  Serial.printf("[AUDIO] Saved reply WAV to SD: %lu bytes\n", (unsigned long)total);
+  if (SD.exists(path))
+    SD.remove(path);
+  if (!SD.rename(tempPath, path))
+  {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
+    lastServerError = "Could not save reply SD cache";
+    return false;
+  }
+
+  Serial.printf("[AUDIO] Saved reply WAV to SD: %lu bytes path=%s\n", (unsigned long)total, path.c_str());
   return true;
 }
 
@@ -2286,11 +2433,32 @@ bool playReplyWavFromSD(const char *path, const String &replyText, bool animateF
   return played;
 }
 
-bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool liveStream = false, bool animateFace = false)
+bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool liveStream = false, bool animateFace = false, const String &audioCacheKey = "")
 {
   lastPlaybackStoppedByButton = false;
   audioStep(1, "HTTP BEGIN");
   Serial.println(String(liveStream ? "Streaming audio: " : "Downloading audio: ") + audioUrl);
+
+  String cachePath = "";
+  if (!liveStream && sdReady && audioCacheKey.length() > 0 && ensureReplyCacheDirectory())
+  {
+    cachePath = replyAudioCachePath(audioCacheKey);
+    if (cachePath.length() > 0 && SD.exists(cachePath))
+    {
+      Serial.println("[AUDIO] Reply SD cache hit: " + cachePath);
+      showText("Speaking...", "Cached reply");
+      bool playedCached = playReplyWavFromSD(cachePath.c_str(), replyText, animateFace);
+      if (lastPlaybackStoppedByButton)
+      {
+        showText("Stopped", "Release TALK");
+        return true;
+      }
+      if (playedCached)
+        return true;
+      Serial.println("[AUDIO] Reply SD cache invalid, removing: " + cachePath);
+      SD.remove(cachePath);
+    }
+  }
 
   if (!ensureWiFiReady())
     return false;
@@ -2332,7 +2500,8 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
   if (!liveStream && sdReady)
   {
     audioStep(4, "SD DOWNLOAD");
-    bool downloaded = downloadHttpStreamToSD(stream, contentLength, REPLY_DOWNLOAD_PATH);
+    String targetPath = cachePath.length() > 0 ? cachePath : String(REPLY_DOWNLOAD_PATH);
+    bool downloaded = downloadHttpStreamToSD(stream, contentLength, targetPath);
     http.end();
     client.stop();
     if (!downloaded)
@@ -2342,7 +2511,10 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
       return false;
     }
 
-    bool playedFromSd = playReplyWavFromSD(REPLY_DOWNLOAD_PATH, replyText, animateFace);
+    if (cachePath.length() > 0)
+      pruneReplyAudioCache();
+
+    bool playedFromSd = playReplyWavFromSD(targetPath.c_str(), replyText, animateFace);
     if (lastPlaybackStoppedByButton)
     {
       showText("Stopped", "Release TALK");
@@ -2638,11 +2810,27 @@ bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
 
 bool speakText(const String &speechText)
 {
+  String audioCacheKey = localReplyAudioCacheKey("tts", speechText);
+  if (sdReady && ensureReplyCacheDirectory())
+  {
+    String cachePath = replyAudioCachePath(audioCacheKey);
+    if (cachePath.length() > 0 && SD.exists(cachePath))
+    {
+      Serial.println("[AUDIO] Local speech SD cache hit: " + cachePath);
+      bool playedCached = playReplyWavFromSD(cachePath.c_str(), speechText, true);
+      showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
+               WiFi.status() == WL_CONNECTED ? "Press TALK" : "Check router");
+      if (playedCached)
+        return true;
+      SD.remove(cachePath);
+    }
+  }
+
   String audioUrl;
   if (!requestSpeechAudio(speechText, &audioUrl))
     return false;
 
-  bool ok = downloadAndPlayWav(audioUrl, speechText, false, true);
+  bool ok = downloadAndPlayWav(audioUrl, speechText, false, true, audioCacheKey);
   showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
            WiFi.status() == WL_CONNECTED ? "Press TALK" : "Check router");
   return ok;
@@ -2994,8 +3182,15 @@ bool postRemoteSdResult(const String &id, const String &action, bool ok, const S
   return code == HTTP_CODE_OK;
 }
 
-bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath)
+bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath, bool overwrite)
 {
+  if (SD.exists(targetPath) && !overwrite)
+    return false;
+
+  String tempPath = targetPath + ".upload";
+  if (SD.exists(tempPath))
+    SD.remove(tempPath);
+
   HTTPClient http;
   ChatNetworkClient client;
   prepareChatClient(client, REMOTE_SD_UPLOAD_TIMEOUT_MS);
@@ -3015,9 +3210,7 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
     return false;
   }
 
-  if (SD.exists(targetPath))
-    SD.remove(targetPath);
-  File output = SD.open(targetPath, FILE_WRITE);
+  File output = SD.open(tempPath, FILE_WRITE);
   if (!output)
   {
     http.end();
@@ -3030,6 +3223,8 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
   if (!buffer)
   {
     output.close();
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
     http.end();
     client.stop();
     return false;
@@ -3063,7 +3258,25 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
   output.close();
   http.end();
   client.stop();
-  return contentLength < 0 || remaining <= 0;
+
+  bool complete = contentLength < 0 || remaining <= 0;
+  if (!complete)
+  {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
+    return false;
+  }
+
+  if (SD.exists(targetPath))
+    SD.remove(targetPath);
+  if (!SD.rename(tempPath, targetPath))
+  {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
+    return false;
+  }
+
+  return true;
 }
 
 bool handleRemoteSdRequest(const JsonObject &request)
@@ -3106,8 +3319,11 @@ bool handleRemoteSdRequest(const JsonObject &request)
     String dir = payload["path"] | "/";
     String name = payload["name"] | "";
     String downloadPath = payload["download_path"] | "";
+    bool overwrite = payload["overwrite"] | false;
     String target = joinRemoteSdPath(dir, name);
-    bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target);
+    if (target.length() > 0 && SD.exists(target) && !overwrite)
+      return postRemoteSdResult(id, action, false, "File already exists on SD", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+    bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target, overwrite);
     return postRemoteSdResult(id, action, ok, ok ? "Uploaded to SD" : "Upload to SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
   }
 
@@ -3131,13 +3347,13 @@ bool handleRemoteSdRelay()
 
   HTTPClient http;
   ChatNetworkClient client;
-  prepareChatClient(client, REMOTE_SD_TIMEOUT_MS);
+  prepareChatClient(client, REMOTE_SD_POLL_TIMEOUT_MS);
   if (!http.begin(client, buildServerUrl(REMOTE_SD_NEXT_PATH)))
   {
     client.stop();
     return false;
   }
-  http.setTimeout(REMOTE_SD_TIMEOUT_MS);
+  http.setTimeout(REMOTE_SD_POLL_TIMEOUT_MS);
   int code = http.GET();
   String response = http.getString();
   http.end();
@@ -4189,11 +4405,13 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
 
   audioStatus("before spoken reply playback");
   setSpeakingState();
-  bool streamReplyLive = reply.action == "bible" ||
-                         reply.action == "story" ||
-                         reply.audioUrl.indexOf(".up.railway.app") >= 0 ||
-                         reply.audioUrl.indexOf("railway.app") >= 0;
-  if (!downloadAndPlayWav(reply.audioUrl, reply.text, streamReplyLive, true))
+  String replyAudioCacheKey = reply.audioCacheable ? reply.audioCacheKey : "";
+  bool streamReplyLive = !reply.audioCacheable &&
+                         (reply.action == "bible" ||
+                          reply.action == "story" ||
+                          reply.audioUrl.indexOf(".up.railway.app") >= 0 ||
+                          reply.audioUrl.indexOf("railway.app") >= 0);
+  if (!downloadAndPlayWav(reply.audioUrl, reply.text, streamReplyLive, true, replyAudioCacheKey))
   {
     if (lastServerError.length() > 0)
       showWrapped("Playback failed", lastServerError);
@@ -4378,18 +4596,18 @@ void loop()
   updateStatusLeds();
   logTouchDiagnostics();
   handleSDFileManager();
-  reportRemoteDeviceStatus();
-  handleRemoteSdRelay();
-  if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
-  {
-    setIdleState();
-    beginSDFileManager(sdReady);
-  }
-
   bool buttonPressed = isRecordButtonPressed();
 
   if (!buttonPressed)
   {
+    reportRemoteDeviceStatus();
+    handleRemoteSdRelay();
+    if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
+    {
+      setIdleState();
+      beginSDFileManager(sdReady);
+    }
+
     if (WiFi.status() != WL_CONNECTED && currentState == TeddyState::IDLE)
       setErrorState();
 
@@ -4441,7 +4659,8 @@ void loop()
 
   unsigned long pressDurationMs = millis() - pressStartedMs;
   recordButtonArmed = false;
-  if (pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
+  bool allowDoubleTapMusic = WiFi.status() != WL_CONNECTED || TOUCH_DOUBLE_TAP_ONLINE_ENABLED;
+  if (allowDoubleTapMusic && pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
   {
     delay(250);
     return;
