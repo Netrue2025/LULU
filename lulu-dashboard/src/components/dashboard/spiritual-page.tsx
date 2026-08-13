@@ -579,7 +579,7 @@ export function SpiritualPage() {
                 <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Source</p>
-                    <p className="font-medium">Local SD</p>
+                    <p className="font-medium">{sdMode === "cloud" ? "Cloud relay" : "Local SD"}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Translation</p>
@@ -591,7 +591,7 @@ export function SpiritualPage() {
                   </div>
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Internet</p>
-                    <p className="font-medium">Not required</p>
+                    <p className="font-medium">{sdMode === "cloud" ? "Required" : "Not required"}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Books</p>
@@ -618,16 +618,6 @@ export function SpiritualPage() {
               </div>
               <aside className="rounded-lg border border-white/10 bg-white/5 p-3">
                 <div className="space-y-3 text-xs">
-                  <Input
-                    aria-label="LULU SD address"
-                    placeholder="LULU SD address"
-                    disabled={sdMode === "cloud"}
-                    value={luluStorageUrl}
-                    onChange={(event) => {
-                      setLuluStorageUrl(event.target.value);
-                      window.localStorage.setItem(LULU_STORAGE_URL_KEY, event.target.value);
-                    }}
-                  />
                   <div className="grid grid-cols-2 gap-2">
                     <Button
                       variant={sdMode === "cloud" ? undefined : "secondary"}
@@ -748,6 +738,21 @@ export function SpiritualPage() {
                       Refresh
                     </Button>
                   </div>
+                  {sdMode === "cloud" ? (
+                    <div className="rounded-md border border-cyan-200/20 bg-cyan-200/10 p-2 text-cyan-100">
+                      Cloud mode uses the hosted LULU backend. The local device IP is ignored here.
+                    </div>
+                  ) : (
+                    <Input
+                      aria-label="LULU SD address"
+                      placeholder="LULU SD address"
+                      value={luluStorageUrl}
+                      onChange={(event) => {
+                        setLuluStorageUrl(event.target.value);
+                        window.localStorage.setItem(LULU_STORAGE_URL_KEY, event.target.value);
+                      }}
+                    />
+                  )}
                 </div>
                 <div className="grid gap-2 text-xs md:grid-cols-2 xl:grid-cols-3">
                   {bibleFolders.map((item) => (

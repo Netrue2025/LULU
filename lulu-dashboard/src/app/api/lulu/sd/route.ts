@@ -251,7 +251,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ...parseStorageHtml(await htmlResponse.text(), path), source: baseUrl });
   } catch {
     return NextResponse.json(
-      { detail: mode === "cloud" ? "LULU backend is not reachable. Check internet, then the dashboard will continue." : "LULU SD card is not reachable" },
+      { detail: mode === "cloud" ? "LULU cloud backend is not reachable from the dashboard server. The local SD IP is only used in Local mode." : "LULU SD card is not reachable" },
       { status: 503 }
     );
   }
@@ -389,7 +389,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ detail: "Unsupported SD action" }, { status: 400 });
   } catch {
     return NextResponse.json(
-      { detail: postMode === "cloud" ? "LULU backend is not reachable. Check internet, then the dashboard will continue." : "LULU SD card is not reachable" },
+      { detail: postMode === "cloud" ? "LULU cloud backend is not reachable from the dashboard server. The local SD IP is only used in Local mode." : "LULU SD card is not reachable" },
       { status: 503 }
     );
   }
