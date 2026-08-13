@@ -3155,7 +3155,9 @@ async def enqueue_remote_sd_request(request: Request) -> JSONResponse:
             raise HTTPException(status_code=400, detail="Missing upload file")
 
         original_name = _safe_remote_file_name(getattr(upload, "filename", "") or "upload.bin")
-        queued = _queue_remote_sd_request("upload", {"path": target_dir, "name": original_name})
+        overwrite_value = str(form.get("overwrite") or "").strip().lower()
+        overwrite = overwrite_value in {"1", "true", "yes", "overwrite"}
+        queued = _queue_remote_sd_request("upload", {"path": target_dir, "name": original_name, "overwrite": overwrite})
         upload_dir = _remote_sd_upload_dir(queued["id"])
         upload_dir.mkdir(parents=True, exist_ok=True)
         upload_path = upload_dir / original_name

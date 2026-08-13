@@ -135,6 +135,18 @@ def clean_translation(value: str) -> str:
     return value[:40] or "BIBLE"
 
 
+def detect_translation(chapters: list[ChapterFile]) -> str | None:
+    counts: defaultdict[str, int] = defaultdict(int)
+    for chapter in chapters:
+        stem = Path(chapter.source).stem
+        match = re.search(r"_([A-Z]{3}[A-Z0-9]{4,})$", stem, re.IGNORECASE)
+        if match:
+            counts[match.group(1).upper()] += 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
 def detect_book(text: str) -> str | None:
     path_text = text.lower()
     fcbh_match = re.search(r"(?:^|/)B(\d{1,3})_{2,}\d{1,3}_", text, re.IGNORECASE)
@@ -152,6 +164,13 @@ def detect_book(text: str) -> str | None:
 
 def detect_chapter(text: str, book: str | None) -> int | None:
     stem = Path(text).stem
+    fcbh_book_chapter_match = re.match(r"^[A-Z]\d{1,3}_{2,}(\d{1,3})_", stem, re.IGNORECASE)
+    if fcbh_book_chapter_match:
+        chapter = int(fcbh_book_chapter_match.group(1))
+        expected = BOOK_BY_CODE.get(book or "", ("", 150))[1]
+        if 1 <= chapter <= expected:
+            return chapter
+
     fcbh_match = re.match(r"^B\d{1,3}_{2,}(\d{1,3})_", stem, re.IGNORECASE)
     if fcbh_match:
         chapter = int(fcbh_match.group(1))
@@ -188,7 +207,7 @@ def inspect_zip(zip_path: Path) -> tuple[list[zipfile.ZipInfo], list[ChapterFile
 
 def import_zip(zip_path: Path, output_root: Path, translation: str | None, language: str, dry_run: bool = False) -> dict:
     infos, chapters, unmapped = inspect_zip(zip_path)
-    translation_id = clean_translation(translation or zip_path.name)
+    translation_id = clean_translation(translation or detect_translation(chapters) or zip_path.name)
     target_root = output_root / translation_id
     duplicates: list[str] = []
     seen: set[tuple[str, int]] = set()
@@ -219,13 +238,45 @@ def import_zip(zip_path: Path, output_root: Path, translation: str | None, langu
         name, _ = BOOK_BY_CODE.get(book, (book, max(chapters_found)))
         books_json[book] = {"name": name, "chapters": max(chapters_found), "availableChapters": chapters_found}
 
+    existing_index: dict = {}
+    index_path = output_root / "index.json"
+    if not dry_run and index_path.exists():
+        try:
+            existing_index = json.loads(index_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing_index = {}
+
+    merged_books = {}
+    existing_books = existing_index.get("books", {}) if existing_index.get("translation") == translation_id else {}
+    if isinstance(existing_books, dict):
+        merged_books.update(existing_books)
+    for book, meta in books_json.items():
+        previous = merged_books.get(book, {}) if isinstance(merged_books.get(book), dict) else {}
+        previous_chapters = previous.get("availableChapters") or list(range(1, int(previous.get("chapters", 0)) + 1))
+        next_chapters = sorted({int(chapter) for chapter in previous_chapters + meta["availableChapters"]})
+        merged_books[book] = {
+            "name": meta["name"],
+            "chapters": max(next_chapters) if next_chapters else meta["chapters"],
+            "availableChapters": next_chapters,
+        }
+
+    source_zips = existing_index.get("sourceZips", []) if existing_index.get("translation") == translation_id else []
+    if isinstance(source_zips, str):
+        source_zips = [source_zips]
+    if not isinstance(source_zips, list):
+        source_zips = []
+    source_zips = [str(item) for item in source_zips if str(item)]
+    if zip_path.name not in source_zips:
+        source_zips.append(zip_path.name)
+
     index = {
         "version": 1,
         "translation": translation_id,
         "language": language,
         "audioFormat": "mp3",
         "sourceZip": zip_path.name,
-        "books": books_json,
+        "sourceZips": source_zips,
+        "books": merged_books,
     }
     if not dry_run:
         output_root.mkdir(parents=True, exist_ok=True)

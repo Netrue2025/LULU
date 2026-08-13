@@ -19,6 +19,12 @@ type SdItem = {
   editable: boolean;
 };
 
+function boolFormValue(value: FormDataEntryValue | null, fallback = false) {
+  if (value === null) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  return ["1", "true", "yes", "overwrite"].includes(normalized);
+}
+
 function cleanBaseUrl(value: string | null) {
   return (value || DEFAULT_LULU_SD_URL).trim().replace(/\/$/, "");
 }
@@ -254,11 +260,13 @@ export async function POST(request: Request) {
         if (typeof file === "object" && file && "arrayBuffer" in file) {
           const upload = file as File;
           const target = splitUploadPath(path, upload.name);
+          const overwrite = boolFormValue(incoming.get("overwrite"), true);
 
           if (mode === "cloud") {
             const outgoing = new FormData();
             outgoing.append("action", "upload");
             outgoing.append("path", target.dir);
+            outgoing.append("overwrite", overwrite ? "1" : "0");
             outgoing.append("file", upload, target.name);
             const queued = await fetchFromCloudSd("/remote/sd/request", {
               method: "POST",
@@ -288,7 +296,8 @@ export async function POST(request: Request) {
             outgoing.append("upload", upload, target.name);
           }
 
-          const response = await fetchFromSd(baseUrl, `/upload?dir=${encodeURIComponent(target.dir)}`, {
+          const uploadPath = `/upload?dir=${encodeURIComponent(target.dir)}&overwrite=${overwrite ? "1" : "0"}`;
+          const response = await fetchFromSd(baseUrl, uploadPath, {
             method: "POST",
             body: outgoing
           }, 300000);

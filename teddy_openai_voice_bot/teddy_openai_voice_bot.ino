@@ -2994,8 +2994,15 @@ bool postRemoteSdResult(const String &id, const String &action, bool ok, const S
   return code == HTTP_CODE_OK;
 }
 
-bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath)
+bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath, bool overwrite)
 {
+  if (SD.exists(targetPath) && !overwrite)
+    return false;
+
+  String tempPath = targetPath + ".upload";
+  if (SD.exists(tempPath))
+    SD.remove(tempPath);
+
   HTTPClient http;
   ChatNetworkClient client;
   prepareChatClient(client, REMOTE_SD_UPLOAD_TIMEOUT_MS);
@@ -3015,9 +3022,7 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
     return false;
   }
 
-  if (SD.exists(targetPath))
-    SD.remove(targetPath);
-  File output = SD.open(targetPath, FILE_WRITE);
+  File output = SD.open(tempPath, FILE_WRITE);
   if (!output)
   {
     http.end();
@@ -3030,6 +3035,8 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
   if (!buffer)
   {
     output.close();
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
     http.end();
     client.stop();
     return false;
@@ -3063,7 +3070,25 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
   output.close();
   http.end();
   client.stop();
-  return contentLength < 0 || remaining <= 0;
+
+  bool complete = contentLength < 0 || remaining <= 0;
+  if (!complete)
+  {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
+    return false;
+  }
+
+  if (SD.exists(targetPath))
+    SD.remove(targetPath);
+  if (!SD.rename(tempPath, targetPath))
+  {
+    if (SD.exists(tempPath))
+      SD.remove(tempPath);
+    return false;
+  }
+
+  return true;
 }
 
 bool handleRemoteSdRequest(const JsonObject &request)
@@ -3106,8 +3131,11 @@ bool handleRemoteSdRequest(const JsonObject &request)
     String dir = payload["path"] | "/";
     String name = payload["name"] | "";
     String downloadPath = payload["download_path"] | "";
+    bool overwrite = payload["overwrite"] | false;
     String target = joinRemoteSdPath(dir, name);
-    bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target);
+    if (target.length() > 0 && SD.exists(target) && !overwrite)
+      return postRemoteSdResult(id, action, false, "File already exists on SD", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+    bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target, overwrite);
     return postRemoteSdResult(id, action, ok, ok ? "Uploaded to SD" : "Upload to SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
   }
 

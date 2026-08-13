@@ -27,6 +27,10 @@
 
 static WebServer storageServer(SD_FILE_MANAGER_PORT);
 static File uploadFile;
+static String uploadTargetPath;
+static String uploadTempPath;
+static bool uploadRejected = false;
+static bool uploadHadError = false;
 static bool storageServerRunning = false;
 static bool storageSdReady = false;
 static bool pendingWifiReconnect = false;
@@ -567,6 +571,26 @@ static void handleMkdir()
 
 static void handleUploadDone()
 {
+  if (uploadRejected)
+  {
+    storageServer.send(409, F("application/json"), F("{\"detail\":\"File already exists on SD\"}"));
+    uploadRejected = false;
+    uploadHadError = false;
+    uploadTargetPath = "";
+    uploadTempPath = "";
+    return;
+  }
+
+  if (uploadHadError)
+  {
+    storageServer.send(500, F("application/json"), F("{\"detail\":\"Upload did not complete\"}"));
+    uploadRejected = false;
+    uploadHadError = false;
+    uploadTargetPath = "";
+    uploadTempPath = "";
+    return;
+  }
+
   sendRedirect(storageServer.arg(F("dir")));
 }
 
@@ -584,26 +608,72 @@ static void handleUploadData()
 
   if (upload.status == UPLOAD_FILE_START)
   {
+    uploadRejected = false;
+    uploadHadError = false;
+    uploadTargetPath = "";
+    uploadTempPath = "";
+
     if (!SD.exists(dir))
       SD.mkdir(dir);
 
     String path = joinPath(dir, upload.filename);
     if (path.length() == 0)
+    {
+      uploadHadError = true;
       return;
+    }
 
-    if (SD.exists(path))
-      SD.remove(path);
-    uploadFile = SD.open(path, FILE_WRITE);
+    bool hasOverwriteArg = storageServer.hasArg(F("overwrite"));
+    String overwriteValue = storageServer.arg(F("overwrite"));
+    overwriteValue.toLowerCase();
+    bool overwrite = overwriteValue == "1" || overwriteValue == "true" || overwriteValue == "yes" || overwriteValue == "overwrite";
+    if (hasOverwriteArg && !overwrite && SD.exists(path))
+    {
+      uploadRejected = true;
+      return;
+    }
+
+    uploadTargetPath = path;
+    uploadTempPath = path + F(".upload");
+    if (SD.exists(uploadTempPath))
+      SD.remove(uploadTempPath);
+    uploadFile = SD.open(uploadTempPath, FILE_WRITE);
+    if (!uploadFile)
+      uploadHadError = true;
   }
   else if (upload.status == UPLOAD_FILE_WRITE)
   {
     if (uploadFile)
-      uploadFile.write(upload.buf, upload.currentSize);
+    {
+      size_t written = uploadFile.write(upload.buf, upload.currentSize);
+      if (written != upload.currentSize)
+        uploadHadError = true;
+    }
   }
   else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED)
   {
     if (uploadFile)
       uploadFile.close();
+
+    if (uploadRejected)
+      return;
+
+    if (upload.status == UPLOAD_FILE_ABORTED || uploadHadError || uploadTempPath.length() == 0 || uploadTargetPath.length() == 0)
+    {
+      if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath))
+        SD.remove(uploadTempPath);
+      uploadHadError = true;
+      return;
+    }
+
+    if (SD.exists(uploadTargetPath))
+      SD.remove(uploadTargetPath);
+    if (!SD.rename(uploadTempPath, uploadTargetPath))
+    {
+      if (SD.exists(uploadTempPath))
+        SD.remove(uploadTempPath);
+      uploadHadError = true;
+    }
   }
 }
 
