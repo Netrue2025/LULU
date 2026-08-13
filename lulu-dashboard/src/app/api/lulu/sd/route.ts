@@ -190,6 +190,14 @@ export async function GET(request: Request) {
 
   try {
     if (mode === "cloud") {
+      if (action === "result") {
+        const id = String(searchParams.get("id") ?? "").trim();
+        if (!id) return NextResponse.json({ detail: "Missing SD request id" }, { status: 400 });
+        const response = await fetchFromCloudSd(`/remote/sd/result/${encodeURIComponent(id)}`, undefined, 10000);
+        const data = await response.json().catch(() => ({}));
+        return NextResponse.json(data, { status: response.status });
+      }
+
       if (action === "bible_status") {
         const response = await fetchFromCloudSd("/remote/sd/request", {
           method: "POST",
@@ -267,26 +275,27 @@ export async function POST(request: Request) {
             outgoing.append("action", "upload");
             outgoing.append("path", target.dir);
             outgoing.append("overwrite", overwrite ? "1" : "0");
-            outgoing.append("timeout_seconds", "180");
+            outgoing.append("timeout_seconds", "0");
             outgoing.append("file", upload, target.name);
             const queued = await fetchFromCloudSd("/remote/sd/request", {
               method: "POST",
               body: outgoing
             }, 300000);
             const queuedData = await queued.json().catch(() => ({}));
+            if (!queued.ok) {
+              return NextResponse.json(queuedData, { status: queued.status });
+            }
             if (queued.status === 202 || queuedData?.queued) {
               return NextResponse.json(
                 {
-                  detail: `LULU has not confirmed ${target.name} on the SD card yet. Keep LULU powered on and try refresh in a moment.`,
+                  ok: true,
                   queued: true,
                   request: queuedData?.request,
+                  detail: `Queued ${target.name}. LULU will write it to the SD card.`,
                   count: uploaded
                 },
-                { status: 504 }
+                { status: 202 }
               );
-            }
-            if (!queued.ok) {
-              return NextResponse.json(queuedData, { status: queued.status });
             }
             uploaded += 1;
             continue;

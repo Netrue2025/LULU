@@ -41,10 +41,11 @@ export function DashboardShell({
   unreadAlerts?: number;
   minimal?: boolean;
 }) {
-  const [authed, setAuthed] = useState(() => (typeof window === "undefined" ? false : window.localStorage.getItem("lulu-dashboard-auth") === "true"));
-  const [role, setRole] = useState(() => (typeof window === "undefined" ? "Admin" : window.localStorage.getItem("lulu-dashboard-role") ?? "Admin"));
+  const [hydrated, setHydrated] = useState(false);
+  const [authed, setAuthed] = useState(false);
+  const [role, setRole] = useState("Admin");
   const [mobileNav, setMobileNav] = useState(false);
-  const [dark, setDark] = useState(() => (typeof window === "undefined" ? false : (window.localStorage.getItem("lulu-dashboard-theme") ?? "dark") === "dark"));
+  const [dark, setDark] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export function DashboardShell({
     setRole(storedRole);
     setDark(storedTheme === "dark");
     document.documentElement.classList.toggle("dark", storedTheme === "dark");
+    setHydrated(true);
   }, []);
 
   function login(nextRole: string) {
@@ -74,6 +76,10 @@ export function DashboardShell({
     setDark(next);
     document.documentElement.classList.toggle("dark", next);
     window.localStorage.setItem("lulu-dashboard-theme", next ? "dark" : "light");
+  }
+
+  if (!hydrated) {
+    return <div className="min-h-screen bg-background" />;
   }
 
   if (!authed) {

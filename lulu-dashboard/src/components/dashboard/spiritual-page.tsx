@@ -39,6 +39,13 @@ type BibleUploadResponse = {
   ok?: boolean;
   count?: number;
   detail?: string;
+  queued?: boolean;
+  request?: {
+    id?: string;
+  };
+  data?: {
+    path?: string;
+  };
 };
 
 type BibleDuplicateChoice = "skip" | "overwrite";
@@ -53,6 +60,11 @@ type BibleUploadTarget = {
   dir: string;
   name: string;
   path: string;
+};
+
+type PendingBibleSync = {
+  id: string;
+  name: string;
 };
 
 const DEFAULT_LULU_STORAGE_URL = process.env.NEXT_PUBLIC_LULU_SD_URL ?? "http://192.168.43.73";
@@ -119,6 +131,7 @@ export function SpiritualPage() {
   const [bibleUploadProgress, setBibleUploadProgress] = useState(0);
   const [bibleUploadPhase, setBibleUploadPhase] = useState("");
   const [duplicateBiblePrompt, setDuplicateBiblePrompt] = useState<BibleDuplicatePrompt | null>(null);
+  const [pendingBibleSyncs, setPendingBibleSyncs] = useState<PendingBibleSync[]>([]);
   const bible = overview?.bible;
   const bibleActivities = useMemo(
     () => (overview?.activities ?? events).filter((item) => /bible|scripture|reading|verse|psalm|proverb/i.test(item.description)).slice(0, 5),
@@ -138,6 +151,48 @@ export function SpiritualPage() {
     void loadBibleStatus();
     void loadBibleFiles(BIBLE_ROOT_PATH);
   }, []);
+
+  useEffect(() => {
+    if (!pendingBibleSyncs.length || sdMode !== "cloud") return;
+
+    let cancelled = false;
+    async function checkPendingBibleSyncs() {
+      const completed = new Set<string>();
+      const failed: string[] = [];
+
+      for (const sync of pendingBibleSyncs) {
+        try {
+          const params = sdQueryParams();
+          params.set("action", "result");
+          params.set("id", sync.id);
+          const response = await fetch(`/api/lulu/sd?${params.toString()}`, { cache: "no-store" });
+          const data = await response.json().catch(() => ({}));
+          if (response.status === 202 || data?.queued) continue;
+          completed.add(sync.id);
+          if (!response.ok || data?.ok === false) failed.push(`${sync.name}: ${data.detail ?? "SD write failed"}`);
+        } catch {
+          continue;
+        }
+      }
+
+      if (cancelled || completed.size === 0) return;
+      setPendingBibleSyncs((current) => current.filter((sync) => !completed.has(sync.id)));
+      if (failed.length) {
+        setOfflineMessage(failed.join(" "));
+        return;
+      }
+      setOfflineMessage(`${completed.size} queued Bible file(s) confirmed on LULU SD.`);
+      await loadBibleStatus();
+      await loadBibleFiles(BIBLE_ROOT_PATH);
+    }
+
+    void checkPendingBibleSyncs();
+    const timer = window.setInterval(() => void checkPendingBibleSyncs(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingBibleSyncs, sdMode]);
 
   function directStorageUrl() {
     return luluStorageUrl.trim().replace(/\/$/, "");
@@ -309,8 +364,10 @@ export function SpiritualPage() {
     setOfflineMessage("");
 
     let uploaded = 0;
+    let queued = 0;
     let skipped = 0;
     let processed = 0;
+    const queuedSyncs: PendingBibleSync[] = [];
 
     try {
       const directoryCache = new Map<string, BibleSdItem[]>();
@@ -342,20 +399,32 @@ export function SpiritualPage() {
         setBibleUploadPhase(`Uploading ${processed + 1} of ${pendingBibleFiles.length}`);
         const response = await uploadFormDataWithProgress(formData);
         if (!response.ok) throw new Error(response.data.detail ?? `Bible upload failed at ${file.name}`);
-        uploaded += response.data.count ?? 1;
+        if (response.data.queued) {
+          queued += 1;
+          if (response.data.request?.id) queuedSyncs.push({ id: response.data.request.id, name: target.name });
+        } else {
+          uploaded += response.data.count ?? 1;
+        }
         processed += 1;
         setBibleUploadProgress(Math.round((processed / pendingBibleFiles.length) * 100));
       }
 
+      if (queuedSyncs.length) {
+        setPendingBibleSyncs((current) => [...current, ...queuedSyncs.filter((next) => !current.some((existing) => existing.id === next.id))]);
+      }
       const skippedText = skipped ? ` Skipped ${skipped} existing file(s).` : "";
-      setOfflineMessage((sdMode === "cloud" ? `Queued ${uploaded} Bible file(s) for LULU SD sync.` : `Uploaded ${uploaded} Bible file(s) to LULU SD.`) + skippedText);
+      const queuedText = queued ? `Queued ${queued} Bible file(s) for LULU to write to SD.` : "";
+      const uploadedText = uploaded ? (sdMode === "cloud" ? `${uploaded} Bible file(s) confirmed on LULU SD.` : `Uploaded ${uploaded} Bible file(s) to LULU SD.`) : "";
+      setOfflineMessage([uploadedText, queuedText, skippedText.trim()].filter(Boolean).join(" "));
       setBibleUploadProgress(100);
-      setBibleUploadPhase("Upload complete");
+      setBibleUploadPhase(queued ? "Waiting for LULU SD confirmation" : "Upload complete");
       clearBibleFiles(false);
-      await loadBibleStatus();
-      await loadBibleFiles(BIBLE_ROOT_PATH);
+      if (!queued) {
+        await loadBibleStatus();
+        await loadBibleFiles(BIBLE_ROOT_PATH);
+      }
     } catch (error) {
-      const keptText = uploaded || skipped ? ` ${uploaded} uploaded and ${skipped} skipped before it stopped; those files are kept.` : "";
+      const keptText = uploaded || queued || skipped ? ` ${uploaded} confirmed, ${queued} queued, and ${skipped} skipped before it stopped; those files are kept or waiting on LULU.` : "";
       setBibleUploadPhase("Upload stopped");
       setOfflineMessage((error instanceof Error ? error.message : "Bible upload failed") + keptText);
     } finally {
@@ -599,6 +668,12 @@ export function SpiritualPage() {
                           style={{ width: `${Math.min(100, Math.max(0, bibleUploadProgress))}%` }}
                         />
                       </div>
+                    </div>
+                  ) : null}
+                  {pendingBibleSyncs.length ? (
+                    <div className="flex items-center gap-2 rounded-md border border-cyan-200/20 bg-cyan-200/10 p-2 text-cyan-100">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>{pendingBibleSyncs.length} file(s) waiting for LULU SD confirmation</span>
                     </div>
                   ) : null}
                 </div>

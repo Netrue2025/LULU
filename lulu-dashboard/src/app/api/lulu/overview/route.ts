@@ -27,6 +27,9 @@ export async function GET() {
     cachedOverview = { ...result, expiresAt: Date.now() + OVERVIEW_CACHE_MS };
     return NextResponse.json(result.data, { status: result.status });
   } catch {
+    if (cachedOverview?.data) {
+      return NextResponse.json(cachedOverview.data, { status: cachedOverview.status === 200 ? 200 : 206 });
+    }
     return NextResponse.json({ detail: "LULU overview endpoint is not reachable" }, { status: 503 });
   } finally {
     pendingOverview = null;

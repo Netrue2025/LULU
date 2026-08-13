@@ -3274,6 +3274,27 @@ def get_remote_sd_upload_file(request_id: str, file_name: str) -> Response:
     return StreamingResponse(path.open("rb"), media_type="application/octet-stream")
 
 
+@app.get("/remote/sd/result/{request_id}")
+def get_remote_sd_result(request_id: str) -> JSONResponse:
+    clean_id = str(request_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="Missing SD request id")
+
+    with remote_sd_lock:
+        state = _remote_sd_state()
+        result = state["results"].get(clean_id)
+        if isinstance(result, dict):
+            return JSONResponse(result)
+        pending = next((item for item in state["pending"] if isinstance(item, dict) and item.get("id") == clean_id), None)
+        last_request = state.get("last_request") if isinstance(state.get("last_request"), dict) else None
+
+    if pending:
+        return JSONResponse({"queued": True, "request": pending, "detail": "Waiting for LULU to pick up this SD request"}, status_code=202)
+    if last_request and last_request.get("id") == clean_id:
+        return JSONResponse({"queued": True, "request": last_request, "detail": "LULU is writing this SD request"}, status_code=202)
+    return JSONResponse({"detail": "SD request result not found"}, status_code=404)
+
+
 @app.post("/remote/sd/result")
 async def receive_remote_sd_result(request: Request) -> JSONResponse:
     try:

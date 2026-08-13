@@ -335,6 +335,9 @@ using ChatNetworkClient = WiFiClient;
 #ifndef REMOTE_SD_UPLOAD_TIMEOUT_MS
 #define REMOTE_SD_UPLOAD_TIMEOUT_MS 300000
 #endif
+#ifndef REMOTE_SD_UPLOAD_IDLE_TIMEOUT_MS
+#define REMOTE_SD_UPLOAD_IDLE_TIMEOUT_MS 45000
+#endif
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 #if defined(FSPI)
@@ -3284,7 +3287,7 @@ bool downloadRemoteSdUpload(const String &downloadPath, const String &targetPath
         lastDataMs = millis();
       }
     }
-    else if (millis() - lastDataMs > REMOTE_SD_TIMEOUT_MS)
+    else if (millis() - lastDataMs > REMOTE_SD_UPLOAD_IDLE_TIMEOUT_MS)
       break;
     delay(1);
   }
