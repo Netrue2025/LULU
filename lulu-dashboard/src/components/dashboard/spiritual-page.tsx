@@ -1,7 +1,7 @@
 "use client";
 
 import { BookOpen, CheckCircle2, Database, File, Folder, HardDrive, Loader2, Mic, RefreshCw, Square, Upload, X } from "lucide-react";
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { PageGrid, StatusBadge } from "@/components/dashboard/shared";
 import { Button } from "@/components/ui/button";
@@ -65,12 +65,16 @@ type BibleUploadTarget = {
 type PendingBibleSync = {
   id: string;
   name: string;
+  dir: string;
+  path: string;
+  queuedAt: number;
 };
 
 const DEFAULT_LULU_STORAGE_URL = process.env.NEXT_PUBLIC_LULU_SD_URL ?? "http://192.168.43.73";
 const LULU_STORAGE_URL_KEY = "lulu-storage-url";
 const BIBLE_ROOT_PATH = "lulu/bible";
 const SD_CONNECTION_MODE_KEY = "lulu-sd-connection-mode";
+const PENDING_BIBLE_SYNCS_KEY = "lulu-pending-bible-syncs";
 
 function formatBytes(value = 0) {
   if (value < 1024) return `${value} B`;
@@ -109,6 +113,19 @@ function splitBibleUploadPath(file: File): BibleUploadTarget {
   return { dir, name, path: `/${[dir, name].filter(Boolean).join("/")}` };
 }
 
+function readPendingBibleSyncs() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PENDING_BIBLE_SYNCS_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is PendingBibleSync =>
+      Boolean(item && typeof item.id === "string" && typeof item.name === "string" && typeof item.dir === "string" && typeof item.path === "string")
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function SpiritualPage() {
   const { overview, events, status } = useLuluRealtime();
   const [remoteStatus, setRemoteStatus] = useState("");
@@ -131,7 +148,8 @@ export function SpiritualPage() {
   const [bibleUploadProgress, setBibleUploadProgress] = useState(0);
   const [bibleUploadPhase, setBibleUploadPhase] = useState("");
   const [duplicateBiblePrompt, setDuplicateBiblePrompt] = useState<BibleDuplicatePrompt | null>(null);
-  const [pendingBibleSyncs, setPendingBibleSyncs] = useState<PendingBibleSync[]>([]);
+  const [pendingBibleSyncs, setPendingBibleSyncs] = useState<PendingBibleSync[]>(readPendingBibleSyncs);
+  const pendingBibleVerifyRef = useRef<Record<string, number>>({});
   const bible = overview?.bible;
   const bibleActivities = useMemo(
     () => (overview?.activities ?? events).filter((item) => /bible|scripture|reading|verse|psalm|proverb/i.test(item.description)).slice(0, 5),
@@ -153,10 +171,19 @@ export function SpiritualPage() {
   }, []);
 
   useEffect(() => {
+    window.localStorage.setItem(PENDING_BIBLE_SYNCS_KEY, JSON.stringify(pendingBibleSyncs));
+  }, [pendingBibleSyncs]);
+
+  useEffect(() => {
     if (!pendingBibleSyncs.length || sdMode !== "cloud") return;
 
     let cancelled = false;
     async function checkPendingBibleSyncs() {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        setOfflineMessage("Internet is offline. LULU SD confirmation will continue when the dashboard reconnects.");
+        return;
+      }
+
       const completed = new Set<string>();
       const failed: string[] = [];
 
@@ -167,10 +194,24 @@ export function SpiritualPage() {
           params.set("id", sync.id);
           const response = await fetch(`/api/lulu/sd?${params.toString()}`, { cache: "no-store" });
           const data = await response.json().catch(() => ({}));
-          if (response.status === 202 || data?.queued) continue;
+          if (response.status === 202 || data?.queued) {
+            if (data?.lost && await bibleFileExistsOnSd(sync)) completed.add(sync.id);
+            continue;
+          }
+          if (response.status === 404) {
+            if (await bibleFileExistsOnSd(sync)) completed.add(sync.id);
+            continue;
+          }
+          if (response.status === 503) {
+            setOfflineMessage(data.detail ?? "LULU backend is not reachable. SD confirmation will keep waiting.");
+            continue;
+          }
           completed.add(sync.id);
           if (!response.ok || data?.ok === false) failed.push(`${sync.name}: ${data.detail ?? "SD write failed"}`);
         } catch {
+          if (typeof navigator !== "undefined" && !navigator.onLine) {
+            setOfflineMessage("Internet is offline. LULU SD confirmation will continue when the dashboard reconnects.");
+          }
           continue;
         }
       }
@@ -193,6 +234,14 @@ export function SpiritualPage() {
       window.clearInterval(timer);
     };
   }, [pendingBibleSyncs, sdMode]);
+
+  async function bibleFileExistsOnSd(sync: PendingBibleSync) {
+    const now = Date.now();
+    if (now - (pendingBibleVerifyRef.current[sync.id] ?? 0) < 30000) return false;
+    pendingBibleVerifyRef.current[sync.id] = now;
+    const items = await loadBibleDirectoryItems(sync.dir);
+    return items.some((item) => item.type === "file" && item.name.toLowerCase() === sync.name.toLowerCase());
+  }
 
   function directStorageUrl() {
     return luluStorageUrl.trim().replace(/\/$/, "");
@@ -338,6 +387,7 @@ export function SpiritualPage() {
       { cache: "no-store" }
     );
     const data = await response.json().catch(() => ({}));
+    if (response.status === 202 || data?.queued) throw new Error(data.detail ?? `LULU is still syncing /${path}`);
     if (!response.ok) throw new Error(data.detail ?? `Could not check /${path} on LULU SD`);
     return Array.isArray(data.items) ? data.items as BibleSdItem[] : [];
   }
@@ -401,7 +451,7 @@ export function SpiritualPage() {
         if (!response.ok) throw new Error(response.data.detail ?? `Bible upload failed at ${file.name}`);
         if (response.data.queued) {
           queued += 1;
-          if (response.data.request?.id) queuedSyncs.push({ id: response.data.request.id, name: target.name });
+          if (response.data.request?.id) queuedSyncs.push({ id: response.data.request.id, name: target.name, dir: target.dir, path: target.path, queuedAt: Date.now() });
         } else {
           uploaded += response.data.count ?? 1;
         }

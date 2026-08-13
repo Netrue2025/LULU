@@ -3292,7 +3292,14 @@ def get_remote_sd_result(request_id: str) -> JSONResponse:
         return JSONResponse({"queued": True, "request": pending, "detail": "Waiting for LULU to pick up this SD request"}, status_code=202)
     if last_request and last_request.get("id") == clean_id:
         return JSONResponse({"queued": True, "request": last_request, "detail": "LULU is writing this SD request"}, status_code=202)
-    return JSONResponse({"detail": "SD request result not found"}, status_code=404)
+    return JSONResponse(
+        {
+            "queued": True,
+            "lost": True,
+            "detail": "SD request confirmation is not available yet. The dashboard will verify the file list.",
+        },
+        status_code=202,
+    )
 
 
 @app.post("/remote/sd/result")

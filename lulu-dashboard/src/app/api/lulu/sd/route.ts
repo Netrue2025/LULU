@@ -250,17 +250,22 @@ export async function GET(request: Request) {
     }
     return NextResponse.json({ ...parseStorageHtml(await htmlResponse.text(), path), source: baseUrl });
   } catch {
-    return NextResponse.json({ detail: "LULU SD card is not reachable" }, { status: 503 });
+    return NextResponse.json(
+      { detail: mode === "cloud" ? "LULU backend is not reachable. Check internet, then the dashboard will continue." : "LULU SD card is not reachable" },
+      { status: 503 }
+    );
   }
 }
 
 export async function POST(request: Request) {
   const contentType = request.headers.get("content-type") ?? "";
+  let postMode = "";
 
   try {
     if (contentType.includes("multipart/form-data")) {
       const incoming = await request.formData();
       const mode = String(incoming.get("mode") ?? "");
+      postMode = mode;
       const baseUrl = cleanBaseUrl(String(incoming.get("baseUrl") ?? ""));
       const path = cleanPath(String(incoming.get("path") ?? ""));
       let uploaded = 0;
@@ -341,6 +346,7 @@ export async function POST(request: Request) {
     const dir = cleanPath(String(body.dir ?? ""));
     const path = cleanPath(String(body.path ?? ""));
     const mode = String(body.mode ?? "");
+    postMode = mode;
 
     if (mode === "cloud") {
       if (action === "folder") {
@@ -382,6 +388,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ detail: "Unsupported SD action" }, { status: 400 });
   } catch {
-    return NextResponse.json({ detail: "LULU SD card is not reachable" }, { status: 503 });
+    return NextResponse.json(
+      { detail: postMode === "cloud" ? "LULU backend is not reachable. Check internet, then the dashboard will continue." : "LULU SD card is not reachable" },
+      { status: 503 }
+    );
   }
 }
