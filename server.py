@@ -225,6 +225,7 @@ POPULAR_RESPONSE_CACHE_SIMILARITY = float(os.getenv("POPULAR_RESPONSE_CACHE_SIMI
 POPULAR_RESPONSE_CACHE_MAX_TEXT_CHARS = int(os.getenv("POPULAR_RESPONSE_CACHE_MAX_TEXT_CHARS", "260"))
 POPULAR_RESPONSE_CACHE_META = "cache/popular_response_cache.json"
 POPULAR_RESPONSE_CACHE_AUDIO_DIR = Path("Voices") / "ResponseCache"
+SD_REPLY_AUDIO_CACHE_MAX_TEXT_CHARS = int(os.getenv("SD_REPLY_AUDIO_CACHE_MAX_TEXT_CHARS", "320"))
 STORY_PATH = Path(os.getenv("STORY_PATH", str(BASE_DIR / "stories.txt")))
 STORY_MAX_BYTES = int(os.getenv("STORY_MAX_BYTES", str(1024 * 1024)))
 INTERACTIVE_FOLLOW_UPS_ENABLED = os.getenv("INTERACTIVE_FOLLOW_UPS_ENABLED", "1").strip().lower() not in {
@@ -1313,6 +1314,29 @@ def is_popular_response_cache_candidate(transcription: str, reply: TeddyReply) -
     ):
         return False
     return True
+
+
+def is_sd_reply_audio_cache_candidate(transcription: str, reply: TeddyReply) -> bool:
+    """Return True when teddy should keep the generated WAV on its SD card."""
+    if reply.action != "speak" or not reply.speech_text.strip():
+        return False
+    if len(reply.speech_text) > SD_REPLY_AUDIO_CACHE_MAX_TEXT_CHARS:
+        return False
+    if (
+        is_weather_question(transcription)
+        or is_bible_question(transcription)
+        or is_story_request(transcription)
+        or is_radio_request(transcription)
+        or is_music_request(transcription)
+        or requested_language(transcription)
+        or is_time_question(transcription)
+    ):
+        return False
+    return True
+
+
+def sd_reply_audio_cache_key(reply: TeddyReply) -> str:
+    return hashlib.sha256(f"{reply.action}\0{reply.speech_text}".encode("utf-8")).hexdigest()[:24]
 
 
 def find_popular_response_cache(transcription: str) -> dict[str, Any] | None:
@@ -3864,6 +3888,9 @@ def chat(
         if reply.display_text:
             storage.append_conversation("lulu", reply.display_text)
 
+        sd_audio_cacheable = bool(audio_url and is_sd_reply_audio_cache_candidate(transcription, reply))
+        sd_audio_cache_key = sd_reply_audio_cache_key(reply) if sd_audio_cacheable else ""
+
         return JSONResponse(
             {
                 "transcription": transcription,
@@ -3871,6 +3898,8 @@ def chat(
                 "audio_url": audio_url,
                 "action": reply.action,
                 "music_query": reply.music_query,
+                "audio_cacheable": sd_audio_cacheable,
+                "audio_cache_key": sd_audio_cache_key,
             }
         )
 
