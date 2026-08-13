@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, CheckCircle2, Database, File, Folder, Mic, RefreshCw, Square, Upload, X } from "lucide-react";
+import { BookOpen, CheckCircle2, Database, File, Folder, HardDrive, Loader2, Mic, RefreshCw, Square, Upload, X } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { PageGrid, StatusBadge } from "@/components/dashboard/shared";
@@ -19,6 +19,9 @@ type BibleOfflineStatus = {
   chapters?: number;
   mp3_files?: number;
   storage_used_bytes?: number;
+  sd_used_bytes?: number;
+  sd_total_bytes?: number;
+  sd_free_bytes?: number;
   index_exists?: boolean;
   lastError?: string;
 };
@@ -61,6 +64,10 @@ function formatBytes(value = 0) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatGb(value = 0) {
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function cleanRelativePath(value: string) {
@@ -118,6 +125,11 @@ export function SpiritualPage() {
   );
   const bibleFolders = bibleFiles.filter((item) => item.type === "directory");
   const bibleFileItems = bibleFiles.filter((item) => item.type === "file");
+  const sdTotalBytes = offlineStatus?.sd_total_bytes ?? 0;
+  const sdUsedBytes = offlineStatus?.sd_used_bytes ?? offlineStatus?.storage_used_bytes ?? 0;
+  const sdUsedPercent = sdTotalBytes > 0 ? Math.min(100, Math.max(0, Math.round((sdUsedBytes / sdTotalBytes) * 100))) : 0;
+  const sdReady = Boolean(offlineStatus?.success || sdTotalBytes > 0 || typeof offlineStatus?.index_exists === "boolean");
+  const sdLoading = offlineBusy || !offlineStatus;
 
   useEffect(() => {
     void loadBibleStatus();
@@ -415,6 +427,25 @@ export function SpiritualPage() {
                     <p className="text-xs text-cyan-100/80">{offlineStatus?.available ? "Bible available offline" : "Bible audio not installed"}</p>
                   </div>
                 </div>
+                <div className="mb-3 rounded-md border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-200 text-slate-950">
+                        {sdReady ? <HardDrive className="h-5 w-5" /> : <Loader2 className="h-5 w-5 animate-spin" />}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-white">{sdReady ? "SD Card Ready" : "Checking SD Card"}</p>
+                        <p className="truncate text-xs text-cyan-100/75">
+                          {sdTotalBytes > 0 ? `${formatGb(sdUsedBytes)} used of ${formatGb(sdTotalBytes)}` : sdLoading ? "Reading capacity from LULU" : "Capacity unavailable"}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums text-cyan-100">{sdTotalBytes > 0 ? `${sdUsedPercent}%` : "--"}</span>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full rounded-full bg-cyan-300 transition-[width] duration-300" style={{ width: `${sdTotalBytes > 0 ? sdUsedPercent : 12}%` }} />
+                  </div>
+                </div>
                 <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Source</p>
@@ -442,7 +473,11 @@ export function SpiritualPage() {
                   </div>
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">SD Used</p>
-                    <p className="font-medium">{formatBytes(offlineStatus?.storage_used_bytes ?? 0)}</p>
+                    <p className="font-medium">{sdTotalBytes > 0 ? formatGb(sdUsedBytes) : formatBytes(offlineStatus?.storage_used_bytes ?? 0)}</p>
+                  </div>
+                  <div className="rounded-md border border-white/10 bg-white/5 p-2">
+                    <p className="text-muted-foreground">SD Total</p>
+                    <p className="font-medium">{sdTotalBytes > 0 ? formatGb(sdTotalBytes) : "Checking"}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-white/5 p-2">
                     <p className="text-muted-foreground">Format</p>

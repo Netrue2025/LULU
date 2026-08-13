@@ -4,7 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { initialEvents } from "@/lib/mock-data";
 import type { ActivityEvent, LuluHealth, LuluOverview, LuluStatus } from "@/lib/types";
 
-export function useLuluRealtime() {
+type LuluRealtimeOptions = {
+  poll?: boolean;
+  healthIntervalMs?: number;
+  overviewIntervalMs?: number;
+};
+
+export function useLuluRealtime(options: LuluRealtimeOptions = {}) {
+  const { poll = false, healthIntervalMs = 15000, overviewIntervalMs = 4000 } = options;
   const [health, setHealth] = useState<LuluHealth | null>(null);
   const [overview, setOverview] = useState<LuluOverview | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>(initialEvents);
@@ -76,14 +83,14 @@ export function useLuluRealtime() {
 
     void loadHealth();
     void loadOverview();
-    const healthTimer = window.setInterval(loadHealth, 15000);
-    const overviewTimer = window.setInterval(loadOverview, 4000);
+    const healthTimer = poll ? window.setInterval(loadHealth, healthIntervalMs) : undefined;
+    const overviewTimer = poll ? window.setInterval(loadOverview, overviewIntervalMs) : undefined;
     return () => {
       cancelled = true;
-      window.clearInterval(healthTimer);
-      window.clearInterval(overviewTimer);
+      if (healthTimer) window.clearInterval(healthTimer);
+      if (overviewTimer) window.clearInterval(overviewTimer);
     };
-  }, []);
+  }, [healthIntervalMs, overviewIntervalMs, poll]);
 
   const status: LuluStatus = useMemo(() => {
     if (loading) return "thinking";

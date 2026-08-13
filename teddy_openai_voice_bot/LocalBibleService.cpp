@@ -78,6 +78,13 @@ static const BibleAlias BIBLE_ALIASES[] = {
     {"revelation", "REV"}, {"revelations", "REV"}, {"rev", "REV"},
 };
 
+static String uint64String(uint64_t value)
+{
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value);
+  return String(buffer);
+}
+
 bool LocalBibleService::begin(bool sdAvailable)
 {
   _available = false;
@@ -180,7 +187,7 @@ String LocalBibleService::lastError() const { return _lastError; }
 String LocalBibleService::statusJson() const
 {
   String json;
-  json.reserve(240);
+  json.reserve(360);
   json += F("{\"success\":true,\"available\":");
   json += _available ? F("true") : F("false");
   json += F(",\"translation\":\"");
@@ -191,6 +198,12 @@ String LocalBibleService::statusJson() const
   json += String(_bookCount);
   json += F(",\"chapters\":");
   json += String(_chapterCount);
+  json += F(",\"sd_used_bytes\":");
+  json += uint64String(SD.usedBytes());
+  json += F(",\"sd_total_bytes\":");
+  json += uint64String(SD.totalBytes());
+  json += F(",\"sd_free_bytes\":");
+  json += uint64String(SD.totalBytes() > SD.usedBytes() ? SD.totalBytes() - SD.usedBytes() : 0);
   json += F(",\"lastError\":\"");
   json += _lastError;
   json += F("\"}");

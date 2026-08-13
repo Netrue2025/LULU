@@ -237,8 +237,6 @@ function ConnectionModal({ onClose }: { onClose: () => void }) {
 
     void loadConnection();
     void loadWifiStatus(nextConfig.deviceIp);
-    const connectionTimer = window.setInterval(loadConnection, 5000);
-    return () => window.clearInterval(connectionTimer);
   }, []);
 
   function updateWifiConfig(next: WifiConfig) {
