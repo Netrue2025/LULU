@@ -53,6 +53,12 @@
 #ifndef TOUCH_DEBUG_SERIAL
 #define TOUCH_DEBUG_SERIAL 0
 #endif
+#ifndef TOUCH_INPUT_PULL_ENABLED
+#define TOUCH_INPUT_PULL_ENABLED 0
+#endif
+#ifndef TOUCH_INTERRUPT_ENABLED
+#define TOUCH_INTERRUPT_ENABLED 1
+#endif
 #ifndef SERIAL_BOOT_DELAY_MS
 #define SERIAL_BOOT_DELAY_MS 1200
 #endif
@@ -380,6 +386,9 @@ enum class TeddyState : uint8_t
 
 bool sdReady = false;
 bool recordButtonArmed = false;
+#if TOUCH_INTERRUPT_ENABLED
+volatile bool touchInterruptPending = false;
+#endif
 bool lastRecordingTooQuiet = false;
 bool lastFollowupUnclear = false;
 bool lastPlaybackStoppedByButton = false;
@@ -505,6 +514,40 @@ bool isTalkButtonPressedRaw()
 {
   return digitalRead(RECORD_BUTTON_PIN) == TOUCH_ACTIVE_LEVEL;
 }
+
+#if TOUCH_INTERRUPT_ENABLED
+void IRAM_ATTR recordButtonInterrupt()
+{
+  touchInterruptPending = true;
+}
+
+bool peekRecordButtonInterrupt()
+{
+  noInterrupts();
+  bool pending = touchInterruptPending;
+  interrupts();
+  return pending;
+}
+
+bool consumeRecordButtonInterrupt()
+{
+  noInterrupts();
+  bool pending = touchInterruptPending;
+  touchInterruptPending = false;
+  interrupts();
+  return pending;
+}
+#else
+bool peekRecordButtonInterrupt()
+{
+  return false;
+}
+
+bool consumeRecordButtonInterrupt()
+{
+  return false;
+}
+#endif
 
 void logTouchDiagnostics(bool force = false)
 {
@@ -4542,7 +4585,8 @@ bool waitForSecondMusicTap()
     updateStatusLeds();
     handleSDFileManager();
 
-    if (isRecordButtonPressed())
+    bool secondTapRaw = isRecordButtonPressed();
+    if (secondTapRaw || consumeRecordButtonInterrupt())
     {
       unsigned long secondPressStartedMs = millis();
       unsigned long debounceStartedMs = millis();
@@ -4552,7 +4596,7 @@ bool waitForSecondMusicTap()
         delay(5);
       }
 
-      while (isRecordButtonPressed())
+      while (secondTapRaw && isRecordButtonPressed())
       {
         if (millis() - secondPressStartedMs >= TOUCH_LONG_PRESS_MS)
         {
@@ -4617,7 +4661,10 @@ void setup()
                 (unsigned long)ESP.getFreePsram(),
                 (unsigned long)ESP.getPsramSize(),
                 (unsigned long)uxTaskGetStackHighWaterMark(NULL));
-  pinMode(RECORD_BUTTON_PIN, TOUCH_ACTIVE_LEVEL == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP);
+  pinMode(RECORD_BUTTON_PIN, TOUCH_INPUT_PULL_ENABLED ? (TOUCH_ACTIVE_LEVEL == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP) : INPUT);
+#if TOUCH_INTERRUPT_ENABLED
+  attachInterrupt(digitalPinToInterrupt(RECORD_BUTTON_PIN), recordButtonInterrupt, TOUCH_ACTIVE_LEVEL == HIGH ? RISING : FALLING);
+#endif
   logTouchDiagnostics(true);
   pinMode(DHT_PIN, INPUT_PULLUP);
   LedManager.begin();
@@ -4657,14 +4704,21 @@ void loop()
 {
   updateStatusLeds();
   logTouchDiagnostics();
-  bool buttonPressed = isRecordButtonPressed();
+  bool rawButtonPressed = isRecordButtonPressed();
+  bool buttonPressed = rawButtonPressed || consumeRecordButtonInterrupt();
   if (!buttonPressed)
     handleSDFileManager();
 
   if (!buttonPressed)
   {
     reportRemoteDeviceStatus();
+    if (isRecordButtonPressed() || peekRecordButtonInterrupt())
+      return;
+
     handleRemoteSdRelay();
+    if (isRecordButtonPressed() || peekRecordButtonInterrupt())
+      return;
+
     if (currentState == TeddyState::CONNECTION_ERROR && connectionErrorActive && connectionErrorNeedsWifi && WiFi.status() == WL_CONNECTED)
     {
       setIdleState();
@@ -4688,6 +4742,8 @@ void loop()
       delay(40);
       return;
     }
+    if (isRecordButtonPressed() || peekRecordButtonInterrupt())
+      return;
 
     // Reminder integration: due reminders are spoken from the main loop to protect audio/I2C.
     if (handleDueReminder())
@@ -4715,7 +4771,7 @@ void loop()
     delay(2);
   }
 
-  if (!isRecordButtonPressed())
+  if (rawButtonPressed && !isRecordButtonPressed())
   {
     recordButtonArmed = false;
     delay(20);
