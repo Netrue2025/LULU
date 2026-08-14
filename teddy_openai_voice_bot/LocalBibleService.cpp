@@ -78,11 +78,106 @@ static const BibleAlias BIBLE_ALIASES[] = {
     {"revelation", "REV"}, {"revelations", "REV"}, {"rev", "REV"},
 };
 
+struct BibleBookInfo
+{
+  const char *code;
+  const char *name;
+  uint16_t chapters;
+};
+
+static const BibleBookInfo BIBLE_BOOKS[] = {
+    {"GEN", "Genesis", 50}, {"EXO", "Exodus", 40}, {"LEV", "Leviticus", 27}, {"NUM", "Numbers", 36},
+    {"DEU", "Deuteronomy", 34}, {"JOS", "Joshua", 24}, {"JDG", "Judges", 21}, {"RUT", "Ruth", 4},
+    {"1SA", "1 Samuel", 31}, {"2SA", "2 Samuel", 24}, {"1KI", "1 Kings", 22}, {"2KI", "2 Kings", 25},
+    {"1CH", "1 Chronicles", 29}, {"2CH", "2 Chronicles", 36}, {"EZR", "Ezra", 10}, {"NEH", "Nehemiah", 13},
+    {"EST", "Esther", 10}, {"JOB", "Job", 42}, {"PSA", "Psalms", 150}, {"PRO", "Proverbs", 31},
+    {"ECC", "Ecclesiastes", 12}, {"SNG", "Song of Solomon", 8}, {"ISA", "Isaiah", 66}, {"JER", "Jeremiah", 52},
+    {"LAM", "Lamentations", 5}, {"EZK", "Ezekiel", 48}, {"DAN", "Daniel", 12}, {"HOS", "Hosea", 14},
+    {"JOL", "Joel", 3}, {"AMO", "Amos", 9}, {"OBA", "Obadiah", 1}, {"JON", "Jonah", 4},
+    {"MIC", "Micah", 7}, {"NAM", "Nahum", 3}, {"HAB", "Habakkuk", 3}, {"ZEP", "Zephaniah", 3},
+    {"HAG", "Haggai", 2}, {"ZEC", "Zechariah", 14}, {"MAL", "Malachi", 4}, {"MAT", "Matthew", 28},
+    {"MRK", "Mark", 16}, {"LUK", "Luke", 24}, {"JHN", "John", 21}, {"ACT", "Acts", 28},
+    {"ROM", "Romans", 16}, {"1CO", "1 Corinthians", 16}, {"2CO", "2 Corinthians", 13}, {"GAL", "Galatians", 6},
+    {"EPH", "Ephesians", 6}, {"PHP", "Philippians", 4}, {"COL", "Colossians", 4}, {"1TH", "1 Thessalonians", 5},
+    {"2TH", "2 Thessalonians", 3}, {"1TI", "1 Timothy", 6}, {"2TI", "2 Timothy", 4}, {"TIT", "Titus", 3},
+    {"PHM", "Philemon", 1}, {"HEB", "Hebrews", 13}, {"JAS", "James", 5}, {"1PE", "1 Peter", 5},
+    {"2PE", "2 Peter", 3}, {"1JN", "1 John", 5}, {"2JN", "2 John", 1}, {"3JN", "3 John", 1},
+    {"JUD", "Jude", 1}, {"REV", "Revelation", 22},
+};
+
 static String uint64String(uint64_t value)
 {
   char buffer[24];
   snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value);
   return String(buffer);
+}
+
+static String baseNameFromBiblePath(String path)
+{
+  path.replace("\\", "/");
+  int slash = path.lastIndexOf('/');
+  return slash >= 0 ? path.substring(slash + 1) : path;
+}
+
+static int bibleBookInfoIndex(const String &bookCode)
+{
+  String code = bookCode;
+  code.toUpperCase();
+  for (uint8_t i = 0; i < sizeof(BIBLE_BOOKS) / sizeof(BIBLE_BOOKS[0]); i++)
+  {
+    if (code == BIBLE_BOOKS[i].code)
+      return i;
+  }
+  return -1;
+}
+
+static int parseDigitsAt(const String &value, int start, int *endOut = nullptr)
+{
+  int end = start;
+  while (end < value.length() && isDigit(value[end]))
+    end++;
+  if (endOut)
+    *endOut = end;
+  return end > start ? value.substring(start, end).toInt() : 0;
+}
+
+static int firstDigitAfter(const String &value, int start)
+{
+  for (int i = start; i < value.length(); i++)
+  {
+    if (isDigit(value[i]))
+      return i;
+  }
+  return -1;
+}
+
+static bool detectNumberedBibleFile(const String &path, String &bookCode, int &chapter)
+{
+  String name = baseNameFromBiblePath(path);
+  int dot = name.lastIndexOf('.');
+  if (dot > 0)
+    name = name.substring(0, dot);
+  if (name.length() < 5 || !isAlpha(name[0]))
+    return false;
+
+  int bookEnd = 0;
+  int bookNumber = parseDigitsAt(name, 1, &bookEnd);
+  if (bookNumber < 1 || bookNumber > (int)(sizeof(BIBLE_BOOKS) / sizeof(BIBLE_BOOKS[0])))
+    return false;
+
+  int chapterStart = name.indexOf("___", bookEnd);
+  chapterStart = chapterStart >= 0 ? chapterStart + 3 : firstDigitAfter(name, bookEnd);
+  if (chapterStart < 0)
+    return false;
+
+  int parsedChapter = parseDigitsAt(name, chapterStart);
+  const BibleBookInfo &book = BIBLE_BOOKS[bookNumber - 1];
+  if (parsedChapter < 1 || parsedChapter > (int)book.chapters)
+    return false;
+
+  bookCode = book.code;
+  chapter = parsedChapter;
+  return true;
 }
 
 bool LocalBibleService::begin(bool sdAvailable)
@@ -93,6 +188,8 @@ bool LocalBibleService::begin(bool sdAvailable)
   _translation = "";
   _language = "";
   _lastError = "";
+  _looseMode = false;
+  memset(_looseChapters, 0, sizeof(_looseChapters));
 
   if (!sdAvailable)
   {
@@ -103,9 +200,8 @@ bool LocalBibleService::begin(bool sdAvailable)
 
   if (!SD.exists(BIBLE_INDEX))
   {
-    _lastError = "Missing /lulu/bible/index.json";
-    Serial.println("[BIBLE] Bible audio not installed");
-    return false;
+    Serial.println("[BIBLE] Bible index missing; scanning uploaded MP3 folders");
+    return beginLooseScan();
   }
 
   File file = SD.open(BIBLE_INDEX, FILE_READ);
@@ -175,6 +271,137 @@ bool LocalBibleService::begin(bool sdAvailable)
     Serial.println("[BIBLE] Bible audio not installed");
   }
   return _available;
+}
+
+bool LocalBibleService::beginLooseScan()
+{
+  if (!SD.exists(BIBLE_ROOT))
+  {
+    _lastError = "Missing /lulu/bible folder";
+    Serial.println("[BIBLE] Bible audio not installed");
+    return false;
+  }
+
+  File root = SD.open(BIBLE_ROOT, FILE_READ);
+  if (!root || !root.isDirectory())
+  {
+    _lastError = "Could not open /lulu/bible";
+    return false;
+  }
+
+  _translation = "SDCARD";
+  _language = "eng";
+  _looseMode = true;
+  scanLooseDirectory(root, BIBLE_ROOT, 0);
+  root.close();
+
+  _available = _bookCount > 0 && _chapterCount > 0;
+  if (_available)
+  {
+    _lastError = "Using scanned Bible MP3 files without index.json";
+    Serial.printf("[BIBLE] Scanned Bible audio: books=%u chapters=%u\n", _bookCount, _chapterCount);
+  }
+  else
+  {
+    _looseMode = false;
+    _translation = "";
+    _language = "";
+    _lastError = "Bible audio is not installed";
+    Serial.println("[BIBLE] No readable Bible MP3 chapters found");
+  }
+  return _available;
+}
+
+void LocalBibleService::scanLooseDirectory(File dir, const String &dirPath, uint8_t depth)
+{
+  if (!dir || depth > 5)
+    return;
+
+  File entry = dir.openNextFile();
+  while (entry)
+  {
+    String name = baseNameFromBiblePath(String(entry.name()));
+    String path = dirPath + "/" + name;
+    if (entry.isDirectory())
+    {
+      scanLooseDirectory(entry, path, depth + 1);
+    }
+    else
+    {
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".mp3"))
+      {
+        String bookCode;
+        int chapter = 0;
+        if (detectLooseChapter(path, bookCode, chapter))
+          addLooseChapter(bookCode, chapter);
+      }
+    }
+    entry.close();
+    entry = dir.openNextFile();
+  }
+}
+
+bool LocalBibleService::addLooseChapter(const String &bookCode, int chapter)
+{
+  int infoIndex = bibleBookInfoIndex(bookCode);
+  if (infoIndex < 0 || chapter < 1 || chapter > MAX_TRACKED_CHAPTERS)
+    return false;
+
+  int index = findBookIndex(bookCode);
+  if (index < 0)
+  {
+    if (_bookCount >= MAX_BOOKS)
+      return false;
+    index = _bookCount++;
+    _books[index].code = BIBLE_BOOKS[infoIndex].code;
+    _books[index].name = BIBLE_BOOKS[infoIndex].name;
+    _books[index].chapters = 0;
+  }
+
+  if (!_looseChapters[index][chapter])
+  {
+    _looseChapters[index][chapter] = true;
+    _chapterCount++;
+  }
+  if (chapter > _books[index].chapters)
+    _books[index].chapters = chapter;
+  return true;
+}
+
+bool LocalBibleService::detectLooseChapter(const String &path, String &bookCode, int &chapter) const
+{
+  if (detectNumberedBibleFile(path, bookCode, chapter))
+    return true;
+
+  String compact = path;
+  compact.toLowerCase();
+  compact.replace("\\", "/");
+  for (uint16_t i = 0; i < sizeof(BIBLE_ALIASES) / sizeof(BIBLE_ALIASES[0]); i++)
+  {
+    String alias = BIBLE_ALIASES[i].alias;
+    alias.replace(" ", "");
+    String compactPath = compact;
+    compactPath.replace(" ", "");
+    compactPath.replace("-", "");
+    compactPath.replace("_", "");
+    if (alias.length() && compactPath.indexOf(alias) >= 0)
+    {
+      int digitAt = firstDigitAfter(baseNameFromBiblePath(path), 0);
+      if (digitAt < 0)
+        return false;
+      int parsedChapter = parseDigitsAt(baseNameFromBiblePath(path), digitAt);
+      int infoIndex = bibleBookInfoIndex(BIBLE_ALIASES[i].code);
+      if (infoIndex >= 0 && parsedChapter >= 1 && parsedChapter <= (int)BIBLE_BOOKS[infoIndex].chapters)
+      {
+        bookCode = BIBLE_ALIASES[i].code;
+        chapter = parsedChapter;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 bool LocalBibleService::isAvailable() const { return _available; }
@@ -281,15 +508,71 @@ bool LocalBibleService::hasBook(const String &bookCode) const
 bool LocalBibleService::hasChapter(const String &bookCode, int chapter) const
 {
   int index = findBookIndex(bookCode);
-  return index >= 0 && chapter >= 1 && chapter <= _books[index].chapters;
+  if (index < 0 || chapter < 1 || chapter > _books[index].chapters)
+    return false;
+  if (_looseMode)
+    return chapter <= MAX_TRACKED_CHAPTERS && _looseChapters[index][chapter];
+  return true;
 }
 
 String LocalBibleService::getChapterPath(const String &bookCode, int chapter) const
 {
   if (!_available || !hasChapter(bookCode, chapter))
     return "";
+  if (_looseMode)
+    return findLooseChapterPath(bookCode, chapter);
   String chapterName = (chapter < 100 ? (chapter < 10 ? "00" : "0") : "") + String(chapter) + ".mp3";
   return String(BIBLE_ROOT) + "/" + _translation + "/" + bookCode + "/" + chapterName;
+}
+
+String LocalBibleService::findLooseChapterPath(const String &bookCode, int chapter) const
+{
+  File root = SD.open(BIBLE_ROOT, FILE_READ);
+  if (!root || !root.isDirectory())
+    return "";
+
+  String path;
+  bool found = findLooseChapterPathInDirectory(root, BIBLE_ROOT, bookCode, chapter, 0, path);
+  root.close();
+  return found ? path : "";
+}
+
+bool LocalBibleService::findLooseChapterPathInDirectory(File dir, const String &dirPath, const String &bookCode, int chapter, uint8_t depth, String &pathOut) const
+{
+  if (!dir || depth > 5)
+    return false;
+
+  File entry = dir.openNextFile();
+  while (entry)
+  {
+    String name = baseNameFromBiblePath(String(entry.name()));
+    String path = dirPath + "/" + name;
+    bool found = false;
+    if (entry.isDirectory())
+    {
+      found = findLooseChapterPathInDirectory(entry, path, bookCode, chapter, depth + 1, pathOut);
+    }
+    else
+    {
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".mp3"))
+      {
+        String candidateBook;
+        int candidateChapter = 0;
+        found = detectLooseChapter(path, candidateBook, candidateChapter) &&
+                candidateBook.equalsIgnoreCase(bookCode) &&
+                candidateChapter == chapter;
+        if (found)
+          pathOut = path;
+      }
+    }
+    entry.close();
+    if (found)
+      return true;
+    entry = dir.openNextFile();
+  }
+  return false;
 }
 
 bool LocalBibleService::resolveReference(const String &text, LocalBibleChapter &chapter)
