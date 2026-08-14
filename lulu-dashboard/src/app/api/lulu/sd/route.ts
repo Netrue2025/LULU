@@ -276,12 +276,26 @@ export async function POST(request: Request) {
           const overwrite = boolFormValue(incoming.get("overwrite"), true);
 
           if (mode === "cloud") {
+            let outboundFile: File | Blob = upload;
+            let outboundName = target.name;
+            if (isMusicPath(path)) {
+              try {
+                const converted = await convertMusicUploadToWav(upload);
+                outboundFile = converted.blob;
+                outboundName = converted.name;
+              } catch (error) {
+                return NextResponse.json(
+                  { detail: `Could not convert ${upload.name || "music file"} to LULU WAV. Check ffmpeg is installed.`, error: String(error) },
+                  { status: 422 }
+                );
+              }
+            }
             const outgoing = new FormData();
             outgoing.append("action", "upload");
             outgoing.append("path", target.dir);
             outgoing.append("overwrite", overwrite ? "1" : "0");
             outgoing.append("timeout_seconds", "0");
-            outgoing.append("file", upload, target.name);
+            outgoing.append("file", outboundFile, outboundName);
             const queued = await fetchFromCloudSd("/remote/sd/request", {
               method: "POST",
               body: outgoing
@@ -296,7 +310,7 @@ export async function POST(request: Request) {
                   ok: true,
                   queued: true,
                   request: queuedData?.request,
-                  detail: `Queued ${target.name}. LULU will write it to the SD card.`,
+                  detail: `Queued ${outboundName}. LULU will write it to the SD card.`,
                   count: uploaded
                 },
                 { status: 202 }
@@ -349,14 +363,20 @@ export async function POST(request: Request) {
     postMode = mode;
 
     if (mode === "cloud") {
-      if (action === "folder") {
+      if (action === "folder" || action === "delete" || action === "rename") {
+        const payload: Record<string, string | number> = {
+          action: action === "folder" ? "mkdir" : action,
+          path: action === "folder" ? dir : path,
+          timeout_seconds: 18
+        };
+        if (action === "folder" || action === "rename") payload.name = String(body.name ?? "");
         const response = await fetchFromCloudSd("/remote/sd/request", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "mkdir", path: dir, name: String(body.name ?? ""), timeout_seconds: 18 })
+          body: JSON.stringify(payload)
         }, 30000);
         const data = await response.json().catch(() => ({}));
-        return NextResponse.json(data.data ?? data, { status: response.status });
+        return NextResponse.json(data, { status: response.status });
       }
 
       return NextResponse.json({ detail: "Cloud SD mode does not support this action yet" }, { status: 400 });

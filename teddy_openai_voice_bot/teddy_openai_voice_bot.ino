@@ -3119,6 +3119,15 @@ String joinRemoteSdPath(const String &dir, String name)
   return base + "/" + name;
 }
 
+String remoteSdParentDir(String path)
+{
+  path = normalizeRemoteSdPath(path);
+  int slash = path.lastIndexOf('/');
+  if (slash <= 0)
+    return "/";
+  return path.substring(0, slash);
+}
+
 bool ensureRemoteSdDirectory(String dir)
 {
   dir = normalizeRemoteSdPath(dir);
@@ -3363,6 +3372,22 @@ bool handleRemoteSdRequest(const JsonObject &request)
       return postRemoteSdResult(id, action, false, "File already exists on SD", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
     bool ok = target.length() > 0 && downloadPath.length() > 0 && ensureRemoteSdDirectory(dir) && downloadRemoteSdUpload(downloadPath, target, overwrite);
     return postRemoteSdResult(id, action, ok, ok ? "Uploaded to SD" : "Upload to SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+  }
+
+  if (action == "delete")
+  {
+    String target = normalizeRemoteSdPath(payload["path"] | "/");
+    bool ok = target != "/" && SD.exists(target) && SD.remove(target);
+    return postRemoteSdResult(id, action, ok, ok ? "Deleted from SD" : "Delete from SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
+  }
+
+  if (action == "rename")
+  {
+    String source = normalizeRemoteSdPath(payload["path"] | "/");
+    String name = payload["name"] | "";
+    String target = joinRemoteSdPath(remoteSdParentDir(source), name);
+    bool ok = source != "/" && target.length() > 0 && SD.exists(source) && !SD.exists(target) && SD.rename(source, target);
+    return postRemoteSdResult(id, action, ok, ok ? "Renamed on SD" : "Rename on SD failed", "{\"path\":\"" + jsonEscapeValue(target) + "\"}");
   }
 
   return postRemoteSdResult(id, action, false, "Unsupported SD action");

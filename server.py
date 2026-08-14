@@ -3233,14 +3233,16 @@ async def enqueue_remote_sd_request(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     action = str(payload.get("action") or "").strip().lower()
-    if action not in {"bible_status", "list", "mkdir"}:
+    if action not in {"bible_status", "list", "mkdir", "delete", "rename"}:
         raise HTTPException(status_code=400, detail="Unsupported SD action")
 
     request_payload: dict[str, Any] = {}
-    if action in {"list", "mkdir"}:
+    if action in {"list", "mkdir", "delete", "rename"}:
         request_payload["path"] = _clean_remote_sd_path(str(payload.get("path") or "/"))
     if action == "mkdir":
         request_payload["name"] = _safe_remote_file_name(str(payload.get("name") or "folder"))
+    if action == "rename":
+        request_payload["name"] = _safe_remote_file_name(str(payload.get("name") or "file"))
 
     queued = _queue_remote_sd_request(action, request_payload)
     result = _wait_remote_sd_result(queued["id"], float(payload.get("timeout_seconds") or 12))

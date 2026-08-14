@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  BookOpenText,
   Cpu,
   Home,
   LogOut,
@@ -25,7 +26,8 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/", label: "Overview", icon: Home },
   { href: "/spiritual", label: "Spiritual", icon: BookOpen },
-  { href: "/music", label: "Music", icon: Music }
+  { href: "/music", label: "Music", icon: Music },
+  { href: "/stories", label: "Stories", icon: BookOpenText }
 ];
 
 export function DashboardShell({
