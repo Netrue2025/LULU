@@ -4430,6 +4430,23 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
     }
 
     Serial.println("[BIBLE] Local playback unavailable: " + lastServerError);
+    if (reply.audioUrl.length() > 0)
+    {
+      showWrapped("Bible", reply.text.length() > 0 ? reply.text : "Reading Bible");
+      audioStatus("before Bible fallback playback");
+      setSpeakingState();
+      if (downloadAndPlayWav(reply.audioUrl, reply.text, true, true))
+      {
+        if (lastPlaybackStoppedByButton)
+        {
+          lastStopRequested = true;
+          return false;
+        }
+        return true;
+      }
+      Serial.println("[BIBLE] Server audio fallback failed: " + lastServerError);
+    }
+
     String friendly = sdReady
                           ? "I can't find that Bible chapter on my SD card."
                           : "I can't access my Bible right now. Please check my SD card.";
@@ -4577,6 +4594,8 @@ bool isRecordButtonPressed()
 
 bool waitForSecondMusicTap()
 {
+  // Clear the first tap's interrupt so it cannot be mistaken for the second tap.
+  consumeRecordButtonInterrupt();
   unsigned long windowStartedMs = millis();
   showText("Tap again", "Music mode");
 

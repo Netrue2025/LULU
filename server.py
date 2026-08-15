@@ -767,6 +767,171 @@ def append_activity(message: str) -> None:
     storage.append_log("activity.log", message)
 
 
+REMINDERS_PATH = "reminders/reminders.json"
+REMINDER_HISTORY_PATH = "reminders/history.json"
+REMINDER_STATUSES = {"scheduled", "paused", "completed"}
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _parse_schedule_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Schedule time is required")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Schedule time must be an ISO datetime") from exc
+    return parsed.isoformat(timespec="seconds")
+
+
+def _normalize_reminder(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    reminder_id = str(raw.get("id") or "").strip()
+    title = str(raw.get("title") or "").strip()
+    schedule_time = str(raw.get("scheduleTime") or raw.get("schedule_time") or "").strip()
+    if not reminder_id or not title or not schedule_time:
+        return None
+
+    status = str(raw.get("status") or "scheduled").strip().lower()
+    if status not in REMINDER_STATUSES:
+        status = "scheduled"
+
+    message = str(raw.get("message") or "").strip()
+    created_at = str(raw.get("createdAt") or raw.get("created_at") or "").strip() or _now_iso()
+    updated_at = str(raw.get("updatedAt") or raw.get("updated_at") or "").strip() or created_at
+    return {
+        "id": reminder_id,
+        "title": title,
+        "message": message,
+        "scheduleTime": schedule_time,
+        "status": status,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    }
+
+
+def load_reminders() -> list[dict[str, Any]]:
+    items = storage.load_json(REMINDERS_PATH, storage.DEFAULT_REMINDERS)
+    if not isinstance(items, list):
+        items = []
+    reminders = [item for item in (_normalize_reminder(item) for item in items) if item is not None]
+    reminders.sort(key=lambda item: item["scheduleTime"])
+    return reminders
+
+
+def save_reminders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    reminders = [item for item in (_normalize_reminder(item) for item in items) if item is not None]
+    storage.save_json(REMINDERS_PATH, reminders)
+    return reminders
+
+
+def load_reminder_history() -> list[dict[str, Any]]:
+    history = storage.load_json(REMINDER_HISTORY_PATH, storage.DEFAULT_REMINDER_HISTORY)
+    return history if isinstance(history, list) else []
+
+
+def append_reminder_history(action: str, reminder: dict[str, Any]) -> None:
+    history = load_reminder_history()
+    entry = {
+        "id": uuid.uuid4().hex,
+        "reminderId": str(reminder.get("id") or ""),
+        "action": action,
+        "title": str(reminder.get("title") or ""),
+        "message": str(reminder.get("message") or ""),
+        "scheduleTime": str(reminder.get("scheduleTime") or ""),
+        "status": str(reminder.get("status") or ""),
+        "timestamp": _now_iso(),
+    }
+    history.insert(0, entry)
+    storage.save_json(REMINDER_HISTORY_PATH, history[:200])
+
+
+def reminder_payload() -> dict[str, Any]:
+    reminders = load_reminders()
+    history = load_reminder_history()
+    upcoming = [
+        item
+        for item in reminders
+        if str(item.get("status")) != "completed"
+    ]
+    return {"reminders": reminders, "history": history, "upcoming": upcoming[:20]}
+
+
+def create_reminder(payload: dict[str, Any]) -> dict[str, Any]:
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Reminder title is required")
+
+    reminder = {
+        "id": uuid.uuid4().hex[:12],
+        "title": title[:80],
+        "message": str(payload.get("message") or "").strip()[:240],
+        "scheduleTime": _parse_schedule_time(payload.get("scheduleTime") or payload.get("schedule_time")),
+        "status": str(payload.get("status") or "scheduled").strip().lower(),
+        "createdAt": _now_iso(),
+        "updatedAt": _now_iso(),
+    }
+    if reminder["status"] not in REMINDER_STATUSES:
+        reminder["status"] = "scheduled"
+
+    reminders = load_reminders()
+    reminders.append(reminder)
+    save_reminders(reminders)
+    append_reminder_history("created", reminder)
+    append_activity(f"Reminder set: {reminder['title']} at {reminder['scheduleTime']}")
+    return reminder
+
+
+def update_reminder(reminder_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    reminders = load_reminders()
+    clean_id = str(reminder_id or "").strip()
+    for index, reminder in enumerate(reminders):
+        if reminder["id"] != clean_id:
+            continue
+
+        updates: dict[str, Any] = {}
+        if "title" in payload:
+            title = str(payload.get("title") or "").strip()
+            if not title:
+                raise HTTPException(status_code=400, detail="Reminder title is required")
+            updates["title"] = title[:80]
+        if "message" in payload:
+            updates["message"] = str(payload.get("message") or "").strip()[:240]
+        if "scheduleTime" in payload or "schedule_time" in payload:
+            updates["scheduleTime"] = _parse_schedule_time(payload.get("scheduleTime") or payload.get("schedule_time"))
+        if "status" in payload:
+            status = str(payload.get("status") or "").strip().lower()
+            if status not in REMINDER_STATUSES:
+                raise HTTPException(status_code=400, detail="Unsupported reminder status")
+            updates["status"] = status
+
+        updated = {**reminder, **updates, "updatedAt": _now_iso()}
+        reminders[index] = updated
+        save_reminders(reminders)
+        append_reminder_history("updated", updated)
+        append_activity(f"Reminder updated: {updated['title']}")
+        return updated
+
+    raise HTTPException(status_code=404, detail="Reminder not found")
+
+
+def delete_reminder(reminder_id: str) -> dict[str, Any]:
+    reminders = load_reminders()
+    clean_id = str(reminder_id or "").strip()
+    for reminder in reminders:
+        if reminder["id"] == clean_id:
+            save_reminders([item for item in reminders if item["id"] != clean_id])
+            append_reminder_history("deleted", reminder)
+            append_activity(f"Reminder deleted: {reminder['title']}")
+            return reminder
+    raise HTTPException(status_code=404, detail="Reminder not found")
+
+
 def key_activity_description(transcription: str, reply: TeddyReply) -> str | None:
     if reply.action == "radio" and reply.display_text:
         return reply.display_text
@@ -3339,6 +3504,42 @@ async def receive_remote_sd_result(request: Request) -> JSONResponse:
 @app.get("/bible/status")
 def bible_status() -> JSONResponse:
     return JSONResponse(read_bible_session_status())
+
+
+@app.get("/api/reminders")
+def api_reminders() -> JSONResponse:
+    return JSONResponse(reminder_payload())
+
+
+@app.post("/api/reminders")
+async def api_create_reminder(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid reminder payload")
+    reminder = create_reminder(payload)
+    return JSONResponse({"reminder": reminder, **reminder_payload()})
+
+
+@app.put("/api/reminders/{reminder_id}")
+async def api_update_reminder(reminder_id: str, request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid reminder payload")
+    reminder = update_reminder(reminder_id, payload)
+    return JSONResponse({"reminder": reminder, **reminder_payload()})
+
+
+@app.delete("/api/reminders/{reminder_id}")
+def api_delete_reminder(reminder_id: str) -> JSONResponse:
+    reminder = delete_reminder(reminder_id)
+    return JSONResponse({"reminder": reminder, **reminder_payload()})
+
+
+@app.delete("/api/reminders/history/clear")
+def api_clear_reminder_history() -> JSONResponse:
+    storage.save_json(REMINDER_HISTORY_PATH, [])
+    append_activity("Reminder history cleared")
+    return JSONResponse(reminder_payload())
 
 
 @app.get("/health")
