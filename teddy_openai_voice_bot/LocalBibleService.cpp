@@ -151,6 +151,83 @@ static int firstDigitAfter(const String &value, int start)
   return -1;
 }
 
+static int lastDigitsBefore(const String &value, int before)
+{
+  int i = min(before - 1, value.length() - 1);
+  while (i >= 0)
+  {
+    while (i >= 0 && !isDigit(value[i]))
+      i--;
+    if (i < 0)
+      return 0;
+
+    int end = i + 1;
+    while (i >= 0 && isDigit(value[i]))
+      i--;
+    int parsed = value.substring(i + 1, end).toInt();
+    if (parsed > 0)
+      return parsed;
+  }
+  return 0;
+}
+
+static bool validBibleChapter(const String &bookCode, int chapter)
+{
+  int infoIndex = bibleBookInfoIndex(bookCode);
+  return infoIndex >= 0 && chapter >= 1 && chapter <= (int)BIBLE_BOOKS[infoIndex].chapters;
+}
+
+static bool detectNamedBibleFile(const String &path, String &bookCode, int &chapter)
+{
+  String name = baseNameFromBiblePath(path);
+  int dot = name.lastIndexOf('.');
+  if (dot > 0)
+    name = name.substring(0, dot);
+  name.toLowerCase();
+  name.replace("_", " ");
+  name.replace("-", " ");
+  name.replace(".", " ");
+  while (name.indexOf("  ") >= 0)
+    name.replace("  ", " ");
+
+  int bestAlias = -1;
+  int bestAliasPos = -1;
+  int bestAliasLen = 0;
+  for (uint16_t i = 0; i < sizeof(BIBLE_ALIASES) / sizeof(BIBLE_ALIASES[0]); i++)
+  {
+    String alias = BIBLE_ALIASES[i].alias;
+    int aliasPos = name.indexOf(alias);
+    if (aliasPos >= 0 && alias.length() > bestAliasLen)
+    {
+      bestAlias = i;
+      bestAliasPos = aliasPos;
+      bestAliasLen = alias.length();
+    }
+  }
+
+  if (bestAlias < 0)
+    return false;
+
+  String candidateBook = BIBLE_ALIASES[bestAlias].code;
+  int parsedChapter = lastDigitsBefore(name, bestAliasPos);
+  if (!validBibleChapter(candidateBook, parsedChapter))
+  {
+    int digitAt = firstDigitAfter(name, bestAliasPos + bestAliasLen);
+    if (digitAt >= 0)
+    {
+      int numberEnd = 0;
+      parsedChapter = parseDigitsAt(name, digitAt, &numberEnd);
+    }
+  }
+
+  if (!validBibleChapter(candidateBook, parsedChapter))
+    return false;
+
+  bookCode = candidateBook;
+  chapter = parsedChapter;
+  return true;
+}
+
 static bool detectNumberedBibleFile(const String &path, String &bookCode, int &chapter)
 {
   String name = baseNameFromBiblePath(path);
@@ -372,6 +449,9 @@ bool LocalBibleService::addLooseChapter(const String &bookCode, int chapter)
 
 bool LocalBibleService::detectLooseChapter(const String &path, String &bookCode, int &chapter) const
 {
+  if (detectNamedBibleFile(path, bookCode, chapter))
+    return true;
+
   if (detectNumberedBibleFile(path, bookCode, chapter))
     return true;
 
