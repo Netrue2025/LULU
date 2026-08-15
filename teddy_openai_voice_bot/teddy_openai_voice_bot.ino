@@ -181,16 +181,16 @@ using ChatNetworkClient = WiFiClient;
 // Audio capture settings.
 #define SAMPLE_RATE 16000
 #ifndef RECORD_MAX_SECONDS
-#define RECORD_MAX_SECONDS 8
+#define RECORD_MAX_SECONDS 16
 #endif
 #ifndef RECORD_MIN_BUFFER_SECONDS
 #define RECORD_MIN_BUFFER_SECONDS 2
 #endif
 #ifndef RECORD_START_TIMEOUT_MS
-#define RECORD_START_TIMEOUT_MS 3500
+#define RECORD_START_TIMEOUT_MS 6000
 #endif
 #ifndef RECORD_END_SILENCE_MS
-#define RECORD_END_SILENCE_MS 1200
+#define RECORD_END_SILENCE_MS 2200
 #endif
 #ifndef RECORD_MIN_CLEAR_SPEECH_MS
 #define RECORD_MIN_CLEAR_SPEECH_MS 300
@@ -280,10 +280,10 @@ using ChatNetworkClient = WiFiClient;
 #endif
 #define TOUCH_LONG_PRESS_MS 2500
 #ifndef TOUCH_TAP_MAX_MS
-#define TOUCH_TAP_MAX_MS 450
+#define TOUCH_TAP_MAX_MS 900
 #endif
 #ifndef TOUCH_DOUBLE_TAP_WINDOW_MS
-#define TOUCH_DOUBLE_TAP_WINDOW_MS 320
+#define TOUCH_DOUBLE_TAP_WINDOW_MS 850
 #endif
 #ifndef TOUCH_DEBOUNCE_MS
 #define TOUCH_DEBOUNCE_MS 35
@@ -298,7 +298,7 @@ using ChatNetworkClient = WiFiClient;
 #define RECORD_SHORT_COMMAND_MAX_SPEECH_MS 800
 #endif
 #ifndef RECORD_SHORT_COMMAND_END_SILENCE_MS
-#define RECORD_SHORT_COMMAND_END_SILENCE_MS 450
+#define RECORD_SHORT_COMMAND_END_SILENCE_MS 900
 #endif
 #ifndef DHT_RETRY_INTERVAL_MS
 #define DHT_RETRY_INTERVAL_MS 5000
@@ -4813,8 +4813,7 @@ void loop()
     delay(10);
   }
 
-  unsigned long pressDurationMs = millis() - pressStartedMs;
-  if (pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
+  if (waitForSecondMusicTap())
   {
     delay(80);
     return;

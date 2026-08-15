@@ -131,6 +131,7 @@ DEFAULT_CHINESE_LESSON["words"][1]["character"] = "\u597d"
 
 DEFAULT_REMINDERS: list[dict[str, Any]] = []
 DEFAULT_REMINDER_HISTORY: list[dict[str, Any]] = []
+DEFAULT_TEMP_REMINDERS: list[dict[str, Any]] = []
 DEFAULT_MEDICATION_SCHEDULE = {"medicines": [], "updated": ""}
 DEFAULT_EMOTIONS = {
     "happy": 0,
@@ -161,6 +162,7 @@ DEFAULT_FILES: tuple[tuple[str, Any], ...] = (
     ("chinese/vocabulary/words.json", []),
     ("reminders/reminders.json", DEFAULT_REMINDERS),
     ("reminders/history.json", DEFAULT_REMINDER_HISTORY),
+    ("reminders/temp_reminders.json", DEFAULT_TEMP_REMINDERS),
     ("medications/schedule.json", DEFAULT_MEDICATION_SCHEDULE),
     ("emotions/state.json", DEFAULT_EMOTIONS),
     ("radio/favorites.json", DEFAULT_RADIO_FAVORITES),

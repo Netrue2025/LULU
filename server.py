@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -117,7 +117,7 @@ OPENAI_CACHE_SECONDS = int(os.getenv("OPENAI_CACHE_SECONDS", "3600"))
 OPENAI_DUPLICATE_WINDOW_SECONDS = int(os.getenv("OPENAI_DUPLICATE_WINDOW_SECONDS", "60"))
 MAX_TRANSCRIPTION_CHARS = int(os.getenv("MAX_TRANSCRIPTION_CHARS", "180"))
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "0.35"))
-MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "12"))
+MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "20"))
 MIN_AUDIO_RMS = int(os.getenv("MIN_AUDIO_RMS", "35"))
 WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "5"))
 WHISPER_VAD_FILTER = os.getenv("WHISPER_VAD_FILTER", "0").strip().lower() in {
@@ -769,7 +769,41 @@ def append_activity(message: str) -> None:
 
 REMINDERS_PATH = "reminders/reminders.json"
 REMINDER_HISTORY_PATH = "reminders/history.json"
+TEMP_REMINDERS_PATH = "reminders/temp_reminders.json"
 REMINDER_STATUSES = {"scheduled", "paused", "completed"}
+VOICE_REMINDER_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:lulu\s+)?(?:"
+    r"remind(?:er)?\s+me(?:\s+(?:to|about|for))?|"
+    r"set\s+(?:a\s+)?reminder(?:\s+(?:to|for|about))?|"
+    r"create\s+(?:a\s+)?reminder(?:\s+(?:to|for|about))?|"
+    r"add\s+(?:a\s+)?reminder(?:\s+(?:to|for|about))?|"
+    r"remember\s+(?:me\s+)?to|notify\s+me(?:\s+(?:to|about))?|"
+    r"alert\s+me(?:\s+(?:to|about))?|tell\s+me\s+to|let\s+me\s+know(?:\s+to)?"
+    r")\s+",
+    re.IGNORECASE,
+)
+VOICE_REMINDER_RELATIVE_RE = re.compile(
+    r"\b(?:in|after)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+"
+    r"(second|seconds|minute|minutes|hour|hours|day|days)\b",
+    re.IGNORECASE,
+)
+VOICE_REMINDER_ABSOLUTE_RE = re.compile(r"\b(?:at|by|for)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", re.IGNORECASE)
+VOICE_NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "fifteen": 15,
+    "twenty": 20,
+}
 
 
 def _now_iso() -> str:
@@ -835,6 +869,28 @@ def load_reminder_history() -> list[dict[str, Any]]:
     return history if isinstance(history, list) else []
 
 
+def load_temp_reminders() -> list[dict[str, Any]]:
+    temp = storage.load_json(TEMP_REMINDERS_PATH, storage.DEFAULT_TEMP_REMINDERS)
+    return temp if isinstance(temp, list) else []
+
+
+def save_temp_reminders(items: list[dict[str, Any]]) -> None:
+    storage.save_json(TEMP_REMINDERS_PATH, items[:200])
+
+
+def mirror_temp_reminder(reminder: dict[str, Any], source_text: str = "") -> None:
+    temp = load_temp_reminders()
+    entry = {
+        **reminder,
+        "source": str(reminder.get("source") or "voice"),
+        "sourceText": source_text[:240],
+        "cachedAt": _now_iso(),
+    }
+    temp = [item for item in temp if not (isinstance(item, dict) and str(item.get("id")) == str(reminder.get("id")))]
+    temp.insert(0, entry)
+    save_temp_reminders(temp)
+
+
 def append_reminder_history(action: str, reminder: dict[str, Any]) -> None:
     history = load_reminder_history()
     entry = {
@@ -854,12 +910,13 @@ def append_reminder_history(action: str, reminder: dict[str, Any]) -> None:
 def reminder_payload() -> dict[str, Any]:
     reminders = load_reminders()
     history = load_reminder_history()
+    temp = load_temp_reminders()
     upcoming = [
         item
         for item in reminders
         if str(item.get("status")) != "completed"
     ]
-    return {"reminders": reminders, "history": history, "upcoming": upcoming[:20]}
+    return {"reminders": reminders, "history": history, "upcoming": upcoming[:20], "cache": temp}
 
 
 def create_reminder(payload: dict[str, Any]) -> dict[str, Any]:
@@ -876,6 +933,10 @@ def create_reminder(payload: dict[str, Any]) -> dict[str, Any]:
         "createdAt": _now_iso(),
         "updatedAt": _now_iso(),
     }
+    source = str(payload.get("source") or "").strip()
+    source_text = str(payload.get("sourceText") or payload.get("source_text") or "").strip()
+    if source:
+        reminder["source"] = source[:40]
     if reminder["status"] not in REMINDER_STATUSES:
         reminder["status"] = "scheduled"
 
@@ -883,8 +944,97 @@ def create_reminder(payload: dict[str, Any]) -> dict[str, Any]:
     reminders.append(reminder)
     save_reminders(reminders)
     append_reminder_history("created", reminder)
+    if source == "voice":
+        mirror_temp_reminder(reminder, source_text)
     append_activity(f"Reminder set: {reminder['title']} at {reminder['scheduleTime']}")
     return reminder
+
+
+def _voice_number(value: str) -> int:
+    text = str(value or "").strip().lower()
+    if text.isdigit():
+        return int(text)
+    return VOICE_NUMBER_WORDS.get(text, 0)
+
+
+def _clean_voice_reminder_message(text: str) -> str:
+    message = re.sub(r"\s+", " ", text or "").strip(" .!?")
+    message = re.sub(r"^(?:to|about|for|that)\s+", "", message, flags=re.IGNORECASE).strip(" .!?")
+    return message[:120] or "reminder"
+
+
+def parse_voice_reminder_payload(transcription: str) -> dict[str, Any] | None:
+    normalized = strip_voice_address(transcription)
+    if not normalized or not VOICE_REMINDER_PREFIX_RE.search(normalized):
+        return None
+
+    working = VOICE_REMINDER_PREFIX_RE.sub("", normalized, count=1).strip()
+    if not working:
+        return None
+
+    now = datetime.now()
+    schedule: datetime | None = None
+    when_match = VOICE_REMINDER_RELATIVE_RE.search(working)
+    if when_match:
+        amount = _voice_number(when_match.group(1))
+        unit = when_match.group(2).lower()
+        if amount <= 0:
+            return None
+        if unit.startswith("second"):
+            schedule = now + timedelta(seconds=amount)
+        elif unit.startswith("minute"):
+            schedule = now + timedelta(minutes=amount)
+        elif unit.startswith("hour"):
+            schedule = now + timedelta(hours=amount)
+        elif unit.startswith("day"):
+            schedule = now + timedelta(days=amount)
+        message = f"{working[:when_match.start()]} {working[when_match.end():]}".strip()
+    else:
+        absolute_match = VOICE_REMINDER_ABSOLUTE_RE.search(working)
+        if not absolute_match:
+            return None
+        hour = int(absolute_match.group(1))
+        minute = int(absolute_match.group(2) or "0")
+        meridiem = absolute_match.group(3).lower()
+        if hour < 1 or hour > 12 or minute > 59:
+            return None
+        if meridiem == "am" and hour == 12:
+            hour = 0
+        elif meridiem == "pm" and hour < 12:
+            hour += 12
+        schedule = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if "tomorrow" in working or schedule <= now:
+            schedule += timedelta(days=1)
+        message = f"{working[:absolute_match.start()]} {working[absolute_match.end():]}".strip()
+
+    message = _clean_voice_reminder_message(message)
+    return {
+        "title": message[:80],
+        "message": message,
+        "scheduleTime": schedule.isoformat(timespec="seconds"),
+        "status": "scheduled",
+        "source": "voice",
+        "sourceText": transcription,
+    }
+
+
+def create_voice_reminder_if_needed(transcription: str) -> dict[str, Any] | None:
+    payload = parse_voice_reminder_payload(transcription)
+    if not payload:
+        return None
+
+    schedule = payload["scheduleTime"]
+    message = str(payload["message"]).strip().lower()
+    for reminder in load_reminders():
+        if (
+            str(reminder.get("message", "")).strip().lower() == message
+            and str(reminder.get("scheduleTime", "")) == schedule
+            and str(reminder.get("status", "")) != "completed"
+        ):
+            mirror_temp_reminder(reminder, transcription)
+            return reminder
+
+    return create_reminder(payload)
 
 
 def update_reminder(reminder_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -926,6 +1076,7 @@ def delete_reminder(reminder_id: str) -> dict[str, Any]:
     for reminder in reminders:
         if reminder["id"] == clean_id:
             save_reminders([item for item in reminders if item["id"] != clean_id])
+            save_temp_reminders([item for item in load_temp_reminders() if not (isinstance(item, dict) and str(item.get("id")) == clean_id)])
             append_reminder_history("deleted", reminder)
             append_activity(f"Reminder deleted: {reminder['title']}")
             return reminder
@@ -3014,6 +3165,16 @@ def generate_reply(
     if is_volume_down_request(transcription):
         return remember(TeddyReply(speech_text="", display_text="Turning volume down.", action="volume_down"))
 
+    voice_reminder = create_voice_reminder_if_needed(transcription)
+    if voice_reminder:
+        schedule = str(voice_reminder.get("scheduleTime") or "")
+        try:
+            schedule_text = datetime.fromisoformat(schedule).strftime("%b %d at %I:%M %p").replace(" 0", " ")
+        except ValueError:
+            schedule_text = "the scheduled time"
+        text = f"Okay Jeremiah. I saved that reminder for {schedule_text}."
+        return remember(TeddyReply(speech_text=text, display_text=text))
+
     music_query = extract_music_query(transcription)
     if music_query:
         return remember(
@@ -3538,6 +3699,7 @@ def api_delete_reminder(reminder_id: str) -> JSONResponse:
 @app.delete("/api/reminders/history/clear")
 def api_clear_reminder_history() -> JSONResponse:
     storage.save_json(REMINDER_HISTORY_PATH, [])
+    storage.save_json(TEMP_REMINDERS_PATH, [])
     append_activity("Reminder history cleared")
     return JSONResponse(reminder_payload())
 
