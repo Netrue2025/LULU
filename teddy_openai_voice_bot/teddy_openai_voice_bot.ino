@@ -4799,15 +4799,9 @@ void loop()
 
   recordButtonArmed = false;
 
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    showText("Listening", "Speak now", "Hold stop in playback");
-    handleConversation();
-    delay(80);
-    return;
-  }
-
-  showText("Touch detected", "Release for music", "Hold to sleep");
+  showText("Touch detected",
+           WiFi.status() == WL_CONNECTED ? "Release to talk" : "Release for music",
+           "Double tap music");
   while (isRecordButtonPressed())
   {
     if (millis() - pressStartedMs >= TOUCH_LONG_PRESS_MS)
@@ -4822,6 +4816,14 @@ void loop()
   unsigned long pressDurationMs = millis() - pressStartedMs;
   if (pressDurationMs <= TOUCH_TAP_MAX_MS && waitForSecondMusicTap())
   {
+    delay(80);
+    return;
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    showText("Listening", "Speak now", "Hold stop in playback");
+    handleConversation();
     delay(80);
     return;
   }
