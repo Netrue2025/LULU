@@ -153,7 +153,8 @@ static int firstDigitAfter(const String &value, int start)
 
 static int lastDigitsBefore(const String &value, int before)
 {
-  int i = min(before - 1, value.length() - 1);
+  int last = (int)value.length() - 1;
+  int i = before - 1 < last ? before - 1 : last;
   while (i >= 0)
   {
     while (i >= 0 && !isDigit(value[i]))

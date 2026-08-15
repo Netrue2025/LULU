@@ -25,12 +25,9 @@
 #ifndef ENABLE_BIBLE_MP3_HELIX
 #define ENABLE_BIBLE_MP3_HELIX 1
 #endif
-#ifndef __has_include
-#define __has_include(path) 0
-#endif
 
-#if ENABLE_BIBLE_MP3_HELIX && __has_include("MP3DecoderHelix.h")
-#include "MP3DecoderHelix.h"
+#if ENABLE_BIBLE_MP3_HELIX
+#include <MP3DecoderHelix.h>
 #define BIBLE_MP3_HELIX_AVAILABLE 1
 #else
 #define BIBLE_MP3_HELIX_AVAILABLE 0
