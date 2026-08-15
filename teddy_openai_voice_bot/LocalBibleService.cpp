@@ -589,38 +589,41 @@ bool LocalBibleService::resolveReference(const String &text, LocalBibleChapter &
   normalized.replace(".", " ");
   normalized.replace(",", " ");
   normalized.replace(":", " ");
+  normalized.replace("-", " ");
   while (normalized.indexOf("  ") >= 0)
     normalized.replace("  ", " ");
   normalized.trim();
 
+  String bookCode;
   int chapterNumber = 0;
-  int numberStart = -1;
-  int verseIndex = normalized.indexOf(" verse ");
-  String chapterSource = verseIndex >= 0 ? normalized.substring(0, verseIndex) : normalized;
-  for (int i = chapterSource.length() - 1; i >= 0; i--)
+  for (int i = 0; i < normalized.length(); i++)
   {
-    if (isDigit(chapterSource[i]))
-      numberStart = i;
-    else if (numberStart >= 0)
+    if (!isDigit(normalized[i]))
+      continue;
+
+    int numberEnd = i;
+    int parsedChapter = parseDigitsAt(normalized, i, &numberEnd);
+    String bookText = normalized.substring(0, i);
+    bookText.replace("verses", " ");
+    bookText.replace("verse", " ");
+    bookText.replace("chapters", " ");
+    bookText.replace("chapter", " ");
+    bookText = normalizeBookText(bookText);
+
+    String candidateBook = resolveBook(bookText);
+    if (candidateBook.length() && hasChapter(candidateBook, parsedChapter))
+    {
+      bookCode = candidateBook;
+      chapterNumber = parsedChapter;
       break;
+    }
+
+    i = numberEnd > i ? numberEnd - 1 : i;
   }
 
-  if (numberStart < 0)
+  if (!bookCode.length() || chapterNumber < 1)
   {
     _lastError = "Please tell me the Bible book and chapter.";
-    return false;
-  }
-
-  chapterNumber = chapterSource.substring(numberStart).toInt();
-  String bookText = chapterSource.substring(0, numberStart);
-  bookText.replace("verse", " ");
-  bookText.replace("verses", " ");
-  bookText = normalizeBookText(bookText);
-
-  String bookCode = resolveBook(bookText);
-  if (!bookCode.length())
-  {
-    _lastError = "I could not find that Bible book offline.";
     return false;
   }
 

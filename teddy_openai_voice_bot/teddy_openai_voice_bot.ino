@@ -23,7 +23,7 @@
 #include "ReminderManager.h"
 
 #ifndef ENABLE_BIBLE_MP3_HELIX
-#define ENABLE_BIBLE_MP3_HELIX 0
+#define ENABLE_BIBLE_MP3_HELIX 1
 #endif
 #ifndef __has_include
 #define __has_include(path) 0
@@ -2807,9 +2807,9 @@ bool playLocalMp3File(const String &path, const String &label)
   (void)path;
   (void)label;
 #if ENABLE_BIBLE_MP3_HELIX
-  lastServerError = "MP3DecoderHelix.h is missing from Arduino libraries";
+  lastServerError = "SD Bible MP3 decoder missing. Install the Arduino MP3DecoderHelix library or convert Bible audio to WAV.";
 #else
-  lastServerError = "MP3 playback disabled";
+  lastServerError = "SD Bible MP3 playback disabled. Set ENABLE_BIBLE_MP3_HELIX to 1 or convert Bible audio to WAV.";
 #endif
   return false;
 #endif
@@ -2833,7 +2833,24 @@ bool playLocalBibleChapter(const String &requestText)
 
 String localBibleStatusJson()
 {
-  return localBible.statusJson();
+  String status = localBible.statusJson();
+  int end = status.lastIndexOf('}');
+  if (end >= 0)
+  {
+    String extra = F(",\"mp3DecoderEnabled\":");
+    extra += BIBLE_MP3_HELIX_AVAILABLE ? F("true") : F("false");
+    extra += F(",\"mp3Decoder\":\"");
+#if BIBLE_MP3_HELIX_AVAILABLE
+    extra += F("MP3DecoderHelix");
+#elif ENABLE_BIBLE_MP3_HELIX
+    extra += F("missing MP3DecoderHelix.h");
+#else
+    extra += F("disabled");
+#endif
+    extra += F("\"");
+    status = status.substring(0, end) + extra + status.substring(end);
+  }
+  return status;
 }
 
 bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
