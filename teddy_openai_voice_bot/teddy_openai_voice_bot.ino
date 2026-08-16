@@ -90,7 +90,7 @@
 #define AUDIO_PLAYBACK_GAIN 1
 #endif
 #ifndef DEFAULT_PLAYBACK_VOLUME
-#define DEFAULT_PLAYBACK_VOLUME 80
+#define DEFAULT_PLAYBACK_VOLUME 100
 #endif
 #ifndef MIN_PLAYBACK_VOLUME
 #define MIN_PLAYBACK_VOLUME 20
@@ -102,7 +102,7 @@
 #define VOLUME_STEP_PERCENT 20
 #endif
 #ifndef PLAYBACK_SAMPLE_LIMIT
-#define PLAYBACK_SAMPLE_LIMIT 24576
+#define PLAYBACK_SAMPLE_LIMIT 30000
 #endif
 #ifndef SPEAK_VOLUME_CONFIRMATION
 #define SPEAK_VOLUME_CONFIRMATION 1
@@ -118,6 +118,9 @@
 #endif
 #ifndef PLAYBACK_NET_BUFFER_BYTES
 #define PLAYBACK_NET_BUFFER_BYTES 1024
+#endif
+#ifndef BIBLE_MP3_BUFFER_BYTES
+#define BIBLE_MP3_BUFFER_BYTES 4096
 #endif
 #ifndef PLAYBACK_I2S_BUFFER_SAMPLES
 #define PLAYBACK_I2S_BUFFER_SAMPLES 1024
@@ -1217,7 +1220,7 @@ bool configureAudioOutputRate(uint32_t sampleRate)
   speakerOutputSampleRate = sampleRate;
   return true;
 #else
-  (void)sampleRate;
+  speakerOutputSampleRate = sampleRate;
   return true;
 #endif
 }
@@ -2730,8 +2733,27 @@ static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t l
     configureAudioOutputRate(sampleRate);
 
 #if AUDIO_OUTPUT_MODE == AUDIO_OUTPUT_I2S
-  size_t bytesWritten = 0;
-  i2s_write(I2S_NUM_1, pcmBuffer, len * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(I2S_WRITE_TIMEOUT_MS));
+  int16_t stereo[512];
+  size_t outSamples = 0;
+  for (size_t i = 0; i < len; i += channels)
+  {
+    int16_t left = applyPlaybackGain(pcmBuffer[i]);
+    int16_t right = channels == 2 && i + 1 < len ? applyPlaybackGain(pcmBuffer[i + 1]) : left;
+    stereo[outSamples++] = left;
+    stereo[outSamples++] = right;
+
+    if (outSamples >= sizeof(stereo) / sizeof(stereo[0]))
+    {
+      size_t bytesWritten = 0;
+      i2s_write(I2S_NUM_1, stereo, outSamples * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(I2S_WRITE_TIMEOUT_MS));
+      outSamples = 0;
+    }
+  }
+  if (outSamples > 0)
+  {
+    size_t bytesWritten = 0;
+    i2s_write(I2S_NUM_1, stereo, outSamples * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(I2S_WRITE_TIMEOUT_MS));
+  }
 #else
   for (size_t i = 0; i < len; i += channels)
   {
@@ -2760,7 +2782,7 @@ bool playLocalMp3File(const String &path, const String &label)
   libhelix::MP3DecoderHelix decoder(bibleMp3PcmCallback);
   decoder.begin();
 
-  uint8_t *buffer = (uint8_t *)allocPlaybackBytes(PLAYBACK_NET_BUFFER_BYTES, "local mp3 buffer");
+  uint8_t *buffer = (uint8_t *)allocPlaybackBytes(BIBLE_MP3_BUFFER_BYTES, "local mp3 buffer");
   if (!buffer)
   {
     file.close();
@@ -2782,7 +2804,7 @@ bool playLocalMp3File(const String &path, const String &label)
       break;
     }
 
-    size_t want = min((size_t)file.available(), (size_t)PLAYBACK_NET_BUFFER_BYTES);
+    size_t want = min((size_t)file.available(), (size_t)BIBLE_MP3_BUFFER_BYTES);
     int readNow = file.read(buffer, want);
     if (readNow <= 0)
     {
@@ -2791,7 +2813,7 @@ bool playLocalMp3File(const String &path, const String &label)
       break;
     }
     decoder.write(buffer, (size_t)readNow);
-    delay(1);
+    yield();
   }
 
   decoder.end();
