@@ -89,6 +89,9 @@
 #ifndef AUDIO_PLAYBACK_GAIN
 #define AUDIO_PLAYBACK_GAIN 1
 #endif
+#ifndef BIBLE_PLAYBACK_GAIN
+#define BIBLE_PLAYBACK_GAIN 2
+#endif
 #ifndef DEFAULT_PLAYBACK_VOLUME
 #define DEFAULT_PLAYBACK_VOLUME 100
 #endif
@@ -120,7 +123,13 @@
 #define PLAYBACK_NET_BUFFER_BYTES 1024
 #endif
 #ifndef BIBLE_MP3_BUFFER_BYTES
-#define BIBLE_MP3_BUFFER_BYTES 4096
+#define BIBLE_MP3_BUFFER_BYTES 8192
+#endif
+#ifndef SPEAKER_I2S_DMA_BUF_COUNT
+#define SPEAKER_I2S_DMA_BUF_COUNT 12
+#endif
+#ifndef SPEAKER_I2S_DMA_BUF_LEN
+#define SPEAKER_I2S_DMA_BUF_LEN 512
 #endif
 #ifndef PLAYBACK_I2S_BUFFER_SAMPLES
 #define PLAYBACK_I2S_BUFFER_SAMPLES 1024
@@ -1109,6 +1118,13 @@ int16_t applyPlaybackGain(int16_t sample)
   return (int16_t)constrain(scaled, -PLAYBACK_SAMPLE_LIMIT, PLAYBACK_SAMPLE_LIMIT);
 }
 
+int16_t applyBiblePlaybackGain(int16_t sample)
+{
+  int32_t boosted = (int32_t)sample * BIBLE_PLAYBACK_GAIN;
+  boosted = constrain(boosted, -32768, 32767);
+  return applyPlaybackGain((int16_t)boosted);
+}
+
 uint8_t *allocBytes(size_t bytes)
 {
   if (ESP.getPsramSize() > 0 && ESP.getFreePsram() >= bytes)
@@ -1152,8 +1168,8 @@ void initAudioOutput()
       .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .communication_format = I2S_COMM_FORMAT_STAND_I2S,
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = 8,
-      .dma_buf_len = 256,
+      .dma_buf_count = SPEAKER_I2S_DMA_BUF_COUNT,
+      .dma_buf_len = SPEAKER_I2S_DMA_BUF_LEN,
       .use_apll = false,
       .tx_desc_auto_clear = true,
       .fixed_mclk = 0};
@@ -2737,8 +2753,8 @@ static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t l
   size_t outSamples = 0;
   for (size_t i = 0; i < len; i += channels)
   {
-    int16_t left = applyPlaybackGain(pcmBuffer[i]);
-    int16_t right = channels == 2 && i + 1 < len ? applyPlaybackGain(pcmBuffer[i + 1]) : left;
+    int16_t left = applyBiblePlaybackGain(pcmBuffer[i]);
+    int16_t right = channels == 2 && i + 1 < len ? applyBiblePlaybackGain(pcmBuffer[i + 1]) : left;
     stereo[outSamples++] = left;
     stereo[outSamples++] = right;
 
@@ -2760,7 +2776,10 @@ static void bibleMp3PcmCallback(MP3FrameInfo &info, int16_t *pcmBuffer, size_t l
     int16_t sample = pcmBuffer[i];
     if (channels == 2 && i + 1 < len)
       sample = (int16_t)(((int32_t)sample + (int32_t)pcmBuffer[i + 1]) / 2);
-    playSamplePWM(sample, sampleRate);
+    sample = applyBiblePlaybackGain(sample);
+    uint8_t pwm = (uint16_t)(sample + 32768) >> 8;
+    ledcWrite(AUDIO_PIN, pwm);
+    delayMicroseconds(1000000UL / sampleRate);
   }
 #endif
 }
