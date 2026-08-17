@@ -70,6 +70,7 @@ class TTSResult:
     cache_hit: bool
     fallback_used: bool
     generation_seconds: float
+    fallback_reason: str = ""
 
 
 class TTSManager:
@@ -97,7 +98,13 @@ class TTSManager:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.audio_dir.mkdir(parents=True, exist_ok=True)
 
-    def speak(self, text: str, mode: str = "conversation", output_path: Path | None = None) -> TTSResult:
+    def speak(
+        self,
+        text: str,
+        mode: str = "conversation",
+        output_path: Path | None = None,
+        allow_fallback: bool = True,
+    ) -> TTSResult:
         """Generate speech without exposing the selected provider to callers."""
         clean_text = text.strip()
         if not clean_text:
@@ -164,13 +171,18 @@ class TTSManager:
                 self._prepare_output(wav_path, output_path, config, provider_used)
                 source_for_cache = wav_path
         except Exception as exc:
+            if not allow_fallback:
+                raise RuntimeError(f"ElevenLabs preview failed: {exc}") from exc
             fallback_used = True
             provider_used = "piper"
+            fallback_reason = str(exc)
             self.logger.warning("TTS primary provider failed; falling back to Piper: %s", exc)
             wav_path = generated_path.with_suffix(".fallback.wav")
             self.piper.synthesize(clean_text, voice_id, wav_path)
             self._prepare_output(wav_path, output_path, config, provider_used)
             source_for_cache = wav_path
+        else:
+            fallback_reason = ""
 
         if cache and cache.is_cacheable(clean_text) and provider_used == configured_provider and not fallback_used:
             cache.store(clean_text, cache_voice_key, mode, provider_used, source_for_cache)
@@ -191,7 +203,7 @@ class TTSManager:
             voice_id,
             seconds,
         )
-        return TTSResult(output_path, provider_used, voice_id, mode, cache_hit, fallback_used, seconds)
+        return TTSResult(output_path, provider_used, voice_id, mode, cache_hit, fallback_used, seconds, fallback_reason)
 
     def voices(self) -> list[dict[str, Any]]:
         """Return available ElevenLabs voices, plus configured fallback labels."""

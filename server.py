@@ -3555,9 +3555,9 @@ def generate_reply(
     return remember(reply)
 
 
-def synthesize_with_piper(text: str, output_path: Path, mode: str = "conversation") -> Any:
+def synthesize_with_piper(text: str, output_path: Path, mode: str = "conversation", allow_fallback: bool = True) -> Any:
     """Generate a WAV file through the modular TTS manager."""
-    return tts_manager.speak(text, mode=mode, output_path=output_path)
+    return tts_manager.speak(text, mode=mode, output_path=output_path, allow_fallback=allow_fallback)
 
 
 def find_wake_response_file() -> Path | None:
@@ -4408,6 +4408,7 @@ def speak(request: Request, text: str, mode: str = "conversation") -> JSONRespon
                 "tts_provider": str(getattr(tts_result, "provider", "")),
                 "tts_voice_id": str(getattr(tts_result, "voice_id", "")),
                 "tts_fallback_used": bool(getattr(tts_result, "fallback_used", False)),
+                "tts_fallback_reason": str(getattr(tts_result, "fallback_reason", "")),
                 "action": "speak",
             }
         )
@@ -4422,13 +4423,14 @@ async def api_tts_speak(request: Request) -> JSONResponse:
     payload = await request.json()
     text = str(payload.get("text", "")).strip()
     mode = str(payload.get("mode", "conversation")).strip() or "conversation"
+    allow_fallback = bool(payload.get("allowFallback", payload.get("allow_fallback", True)))
     if not text:
         raise HTTPException(status_code=400, detail="Missing text")
 
     output_path = AUDIO_DIR / "tts_api_response.wav"
     try:
         with reply_lock:
-            result = tts_manager.speak(text, mode=mode, output_path=output_path)
+            result = tts_manager.speak(text, mode=mode, output_path=output_path, allow_fallback=allow_fallback)
         return JSONResponse(
             {
                 "text": text,
@@ -4437,6 +4439,7 @@ async def api_tts_speak(request: Request) -> JSONResponse:
                 "voice_id": result.voice_id,
                 "cache_hit": result.cache_hit,
                 "fallback_used": result.fallback_used,
+                "fallback_reason": result.fallback_reason,
                 "generation_seconds": result.generation_seconds,
                 "audio_url": public_url("/audio/tts_api_response.wav"),
             }
@@ -4547,6 +4550,7 @@ def chat(
         tts_provider = ""
         tts_voice_id = ""
         tts_fallback_used = False
+        tts_fallback_reason = ""
         if reply.action == "wake":
             with reply_lock:
                 wake_audio_ready = prepare_wake_response_audio(WAKE_RESPONSE_WAV_PATH)
@@ -4555,6 +4559,7 @@ def chat(
                     tts_provider = str(getattr(tts_result, "provider", ""))
                     tts_voice_id = str(getattr(tts_result, "voice_id", ""))
                     tts_fallback_used = bool(getattr(tts_result, "fallback_used", False))
+                    tts_fallback_reason = str(getattr(tts_result, "fallback_reason", ""))
 
             audio_url = public_url("/audio/wake_response.wav" if wake_audio_ready else "/audio/reply.wav")
         elif reply.action in {"speak", "story", "bible"} and reply.speech_text:
@@ -4572,6 +4577,7 @@ def chat(
                     tts_provider = str(getattr(tts_result, "provider", ""))
                     tts_voice_id = str(getattr(tts_result, "voice_id", ""))
                     tts_fallback_used = bool(getattr(tts_result, "fallback_used", False))
+                    tts_fallback_reason = str(getattr(tts_result, "fallback_reason", ""))
                     record_popular_response_candidate(
                         transcription,
                         reply,
@@ -4603,6 +4609,7 @@ def chat(
                 "tts_provider": tts_provider,
                 "tts_voice_id": tts_voice_id,
                 "tts_fallback_used": tts_fallback_used,
+                "tts_fallback_reason": tts_fallback_reason,
             }
         )
 
