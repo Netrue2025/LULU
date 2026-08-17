@@ -2904,9 +2904,11 @@ String localBibleStatusJson()
   return status;
 }
 
-bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
+bool requestSpeechAudio(const String &speechText, String *audioUrlOut, String *audioCacheKeyOut = nullptr)
 {
   *audioUrlOut = "";
+  if (audioCacheKeyOut)
+    *audioCacheKeyOut = "";
 
   if (!ensureWiFiReady())
     return false;
@@ -2952,8 +2954,12 @@ bool requestSpeechAudio(const String &speechText, String *audioUrlOut)
   String audioUrl = doc["audio_url"] | "";
   audioUrl.trim();
   audioUrl = normalizeServerAudioUrl(audioUrl, CHAT_AUDIO_PATH);
+  String audioCacheKey = doc["audio_cache_key"] | "";
+  audioCacheKey.trim();
 
   *audioUrlOut = audioUrl;
+  if (audioCacheKeyOut)
+    *audioCacheKeyOut = audioCacheKey;
   return true;
 }
 
@@ -2976,8 +2982,11 @@ bool speakText(const String &speechText)
   }
 
   String audioUrl;
-  if (!requestSpeechAudio(speechText, &audioUrl))
+  String serverAudioCacheKey;
+  if (!requestSpeechAudio(speechText, &audioUrl, &serverAudioCacheKey))
     return false;
+  if (serverAudioCacheKey.length() > 0)
+    audioCacheKey = serverAudioCacheKey;
 
   bool ok = downloadAndPlayWav(audioUrl, speechText, false, true, audioCacheKey);
   showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
@@ -3003,8 +3012,11 @@ bool playMessageNotificationAudio(const String &speechText)
   }
 
   String audioUrl;
-  if (!requestSpeechAudio(speechText, &audioUrl))
+  String serverAudioCacheKey;
+  if (!requestSpeechAudio(speechText, &audioUrl, &serverAudioCacheKey))
     return false;
+  if (serverAudioCacheKey.length() > 0)
+    audioCacheKey = serverAudioCacheKey;
 
   Serial.println("[MESSAGE] Downloading notification audio to SD before playback");
   return downloadAndPlayWav(audioUrl, speechText, false, true, audioCacheKey);

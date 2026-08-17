@@ -4357,10 +4357,18 @@ def speak(request: Request, text: str, mode: str = "conversation") -> JSONRespon
         with reply_lock:
             synthesize_with_piper(speech_text, REPLY_WAV_PATH, mode=mode)
 
+        tts_config = tts_manager.load_config()
+        normalized_mode = tts_manager.normalize_mode(mode)
+        voice = tts_manager.voice_for_mode(normalized_mode, tts_config)
+        voice_id = voice.get("voice_id") or str(tts_config.get("defaultVoice") or "default")
+        cache_basis = tts_manager.cache_voice_key(voice_id, normalized_mode, tts_config)
+        audio_cache_key = hashlib.sha256(f"speak\0{normalized_mode}\0{cache_basis}\0{speech_text}".encode("utf-8")).hexdigest()[:24]
+
         return JSONResponse(
             {
                 "text": speech_text,
                 "audio_url": public_url("/audio/reply.wav"),
+                "audio_cache_key": audio_cache_key,
                 "action": "speak",
             }
         )
