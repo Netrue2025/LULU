@@ -383,6 +383,13 @@ struct RemoteCommand
   String text;
 };
 
+enum TouchTapResult
+{
+  TOUCH_TAP_NONE,
+  TOUCH_TAP_DETECTED,
+  TOUCH_TAP_SLEEP
+};
+
 bool runConversationTurn(bool quietIsError, const String &listenPrompt);
 bool checkRemoteStopRequested();
 bool readRemoteMessages();
@@ -4771,13 +4778,6 @@ bool isRecordButtonPressed()
 {
   return isTalkButtonPressedRaw();
 }
-
-enum TouchTapResult
-{
-  TOUCH_TAP_NONE,
-  TOUCH_TAP_DETECTED,
-  TOUCH_TAP_SLEEP
-};
 
 TouchTapResult waitForTapWindow(uint32_t windowMs, const String &line1, const String &line2)
 {
