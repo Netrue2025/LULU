@@ -3962,6 +3962,8 @@ def api_messages_readout() -> JSONResponse:
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    tts_config = tts_manager.load_config()
+    tts_voice = tts_manager.voice_for_mode("conversation", tts_config)
     return {
         "status": "ok",
         "deploy_marker": "tts-preview-no-fallback-2026-08-17",
@@ -3986,6 +3988,11 @@ def health() -> dict[str, str]:
         "piper_length_scale": PIPER_LENGTH_SCALE,
         "piper_noise_scale": PIPER_NOISE_SCALE,
         "piper_noise_w": PIPER_NOISE_W,
+        "tts_provider": str(tts_config.get("provider", "")),
+        "tts_voice_id": str(tts_voice.get("voice_id", "")),
+        "tts_voice_name": str(tts_voice.get("display_name", "")),
+        "tts_voice_speed": str(tts_config.get("voiceSpeed", 1.0)),
+        "tts_pitch_semitones": str(tts_config.get("pitchSemitones", 0.0)),
     }
 
 
@@ -4462,11 +4469,14 @@ async def api_tts_speak(request: Request) -> JSONResponse:
 @app.get("/api/tts/voices")
 def api_tts_voices() -> JSONResponse:
     """Return available ElevenLabs voices for dashboard dropdowns."""
+    voices = tts_manager.voices()
+    piper_voices = tts_manager.piper.voices()
     return JSONResponse(
         {
             "provider_available": tts_manager.elevenlabs.available,
             "api_key_status": tts_manager.elevenlabs.api_key_status(),
-            "voices": tts_manager.voices(),
+            "voices": voices,
+            "piper_voices": piper_voices,
         }
     )
 

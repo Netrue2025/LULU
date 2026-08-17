@@ -1,22 +1,22 @@
 {
-  "provider": "elevenlabs",
-  "defaultVoice": "talia",
+  "provider": "piper",
+  "defaultVoice": "en_US-amy-medium",
   "fallback": "piper",
   "cacheEnabled": false,
   "cacheFolder": "cache/tts_cache",
   "elevenlabsGainDb": 10,
   "voices": {
     "conversation": {
-      "voice_id": "OZ0L6eISlOejga3XjDFt",
-      "display_name": "Talia - Warm Soft Guide"
+      "voice_id": "en_US-amy-medium",
+      "display_name": "Amy - Soft American"
     },
     "story": {
-      "voice_id": "OZ0L6eISlOejga3XjDFt",
-      "display_name": "Talia - Warm Soft Guide"
+      "voice_id": "en_GB-alba-medium",
+      "display_name": "Alba - Soft British"
     },
     "education": {
-      "voice_id": "OZ0L6eISlOejga3XjDFt",
-      "display_name": "Talia - Warm Soft Guide"
+      "voice_id": "en_US-lessac-medium",
+      "display_name": "Lessac - Clear American"
     }
   }
 }

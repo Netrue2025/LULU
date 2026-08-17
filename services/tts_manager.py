@@ -171,8 +171,9 @@ class TTSManager:
                 self._prepare_output(wav_path, output_path, config, provider_used)
                 source_for_cache = wav_path
         except Exception as exc:
-            if not allow_fallback:
-                raise RuntimeError(f"ElevenLabs preview failed: {exc}") from exc
+            if not allow_fallback or configured_provider == "piper":
+                provider_label = "ElevenLabs" if configured_provider == "elevenlabs" else "Piper"
+                raise RuntimeError(f"{provider_label} preview failed: {exc}") from exc
             fallback_used = True
             provider_used = "piper"
             fallback_reason = str(exc)
@@ -206,16 +207,17 @@ class TTSManager:
         return TTSResult(output_path, provider_used, voice_id, mode, cache_hit, fallback_used, seconds, fallback_reason)
 
     def voices(self) -> list[dict[str, Any]]:
-        """Return available ElevenLabs voices, plus configured fallback labels."""
+        """Return available ElevenLabs voices plus local Piper voices."""
         config = self.load_config()
         try:
-            voices = self.elevenlabs.voices()
+            voices = list(self.elevenlabs.voices())
         except Exception as exc:
             self.logger.warning("ElevenLabs voice discovery failed: %s", exc)
             voices = []
 
+        piper_voices = self.piper.voices()
         if voices:
-            return voices
+            return voices + piper_voices
 
         configured = []
         for mode, voice in dict(config.get("voices", {})).items():
@@ -228,8 +230,7 @@ class TTSManager:
                         "labels": {"mode": mode},
                     }
                 )
-        configured.append({"voice_id": "piper", "display_name": "Local Piper", "category": "local", "labels": {}})
-        return configured
+        return configured + piper_voices
 
     def resolve_elevenlabs_voice_id(self, configured_voice_id: str, display_name: str = "") -> str:
         """Resolve configured labels/names to a real ElevenLabs voice_id."""
@@ -282,8 +283,8 @@ class TTSManager:
     def load_config(self) -> dict[str, Any]:
         """Load TTS configuration from config/tts.json."""
         defaults = {
-            "provider": "elevenlabs",
-            "defaultVoice": "talia",
+            "provider": "piper",
+            "defaultVoice": "en_US-amy-medium",
             "fallback": "piper",
             "cacheEnabled": False,
             "cacheFolder": "cache/tts_cache",
@@ -291,9 +292,9 @@ class TTSManager:
             "voiceSpeed": 1.0,
             "pitchSemitones": 0.0,
             "voices": {
-                "conversation": {"voice_id": "talia", "display_name": "Talia"},
-                "story": {"voice_id": "florence", "display_name": "Florence"},
-                "education": {"voice_id": "eddie", "display_name": "Eddie"},
+                "conversation": {"voice_id": "en_US-amy-medium", "display_name": "Amy - Soft American"},
+                "story": {"voice_id": "en_GB-alba-medium", "display_name": "Alba - Soft British"},
+                "education": {"voice_id": "en_US-lessac-medium", "display_name": "Lessac - Clear American"},
             },
         }
         if not self.config_path.exists():
