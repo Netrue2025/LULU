@@ -4468,7 +4468,7 @@ async def api_tts_speak(request: Request) -> JSONResponse:
 
 @app.get("/api/tts/voices")
 def api_tts_voices() -> JSONResponse:
-    """Return available ElevenLabs voices for dashboard dropdowns."""
+    """Return available remote and local voices for dashboard dropdowns."""
     voices = tts_manager.voices()
     piper_voices = tts_manager.piper.voices()
     return JSONResponse(
@@ -4497,6 +4497,12 @@ def api_tts_cache_delete(file: str | None = None) -> JSONResponse:
 def api_tts_cache_preload() -> JSONResponse:
     """Preload common short phrases into the TTS cache."""
     return JSONResponse(tts_manager.preload_common_phrases())
+
+
+@app.post("/api/tts/piper/install")
+def api_tts_piper_install() -> JSONResponse:
+    """Download all curated Piper voice assets."""
+    return JSONResponse(tts_manager.piper.install_voices())
 
 
 @app.get("/api/tts/config")

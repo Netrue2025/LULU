@@ -293,8 +293,8 @@ class TTSManager:
             "pitchSemitones": 0.0,
             "voices": {
                 "conversation": {"voice_id": "en_US-amy-medium", "display_name": "Amy - Soft American"},
-                "story": {"voice_id": "en_GB-alba-medium", "display_name": "Alba - Soft British"},
-                "education": {"voice_id": "en_US-lessac-medium", "display_name": "Lessac - Clear American"},
+                "story": {"voice_id": "en_GB-cori-medium", "display_name": "Cori - British Story Mode"},
+                "education": {"voice_id": "en_GB-jenny_dioco-medium", "display_name": "Jenny Dioco - Premium UK LULU"},
             },
         }
         if not self.config_path.exists():

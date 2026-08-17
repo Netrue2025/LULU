@@ -11,12 +11,12 @@
       "display_name": "Amy - Soft American"
     },
     "story": {
-      "voice_id": "en_GB-alba-medium",
-      "display_name": "Alba - Soft British"
+      "voice_id": "en_GB-cori-medium",
+      "display_name": "Cori - British Story Mode"
     },
     "education": {
-      "voice_id": "en_US-lessac-medium",
-      "display_name": "Lessac - Clear American"
+      "voice_id": "en_GB-jenny_dioco-medium",
+      "display_name": "Jenny Dioco - Premium UK LULU"
     }
   }
 }
