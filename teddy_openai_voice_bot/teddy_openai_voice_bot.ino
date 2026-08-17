@@ -2066,7 +2066,7 @@ String replyAudioCachePath(String cacheKey)
   return String(REPLY_CACHE_DIR) + "/" + clean + ".wav";
 }
 
-void pruneReplyAudioCache()
+void pruneReplyAudioCache(const String &protectedPath = "")
 {
   if (!sdReady || !SD.exists(REPLY_CACHE_DIR))
     return;
@@ -2105,7 +2105,8 @@ void pruneReplyAudioCache()
     return;
 
   uint16_t removeCount = count - MAX_REPLY_SD_CACHE_FILES;
-  for (uint16_t i = 0; i < removeCount && i < MAX_REPLY_SD_CACHE_FILES + 8; i++)
+  uint16_t removed = 0;
+  for (uint16_t i = 0; removed < removeCount && i < MAX_REPLY_SD_CACHE_FILES + 8; i++)
   {
     String name = removable[i];
     if (name.length() == 0)
@@ -2114,7 +2115,10 @@ void pruneReplyAudioCache()
     if (slash >= 0)
       name = name.substring(slash + 1);
     String path = String(REPLY_CACHE_DIR) + "/" + name;
+    if (protectedPath.length() > 0 && path == protectedPath)
+      continue;
     SD.remove(path);
+    removed++;
     Serial.println("[AUDIO] Pruned reply cache: " + path);
   }
 }
@@ -2621,10 +2625,10 @@ bool downloadAndPlayWav(const String &audioUrl, const String &replyText, bool li
       return false;
     }
 
-    if (cachePath.length() > 0)
-      pruneReplyAudioCache();
-
     bool playedFromSd = playReplyWavFromSD(targetPath.c_str(), replyText, animateFace);
+    if (cachePath.length() > 0)
+      pruneReplyAudioCache(targetPath);
+
     if (lastPlaybackStoppedByButton)
     {
       showText("Stopped", "Release TALK");
