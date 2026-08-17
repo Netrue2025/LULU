@@ -117,8 +117,9 @@ class TTSManager:
         provider_used = str(config.get("provider", "elevenlabs")).lower()
         source_for_cache: Path | None = None
 
+        cache_voice_key = self.cache_voice_key(voice_id, mode, config)
         if cache and cache.is_cacheable(clean_text):
-            entry = cache.lookup(clean_text, voice_id, mode)
+            entry = cache.lookup(clean_text, cache_voice_key, mode)
             if entry:
                 self._prepare_output(cache.path_for(entry), output_path, config, entry.provider)
                 self.logger.info(
@@ -162,7 +163,7 @@ class TTSManager:
             source_for_cache = wav_path
 
         if cache and cache.is_cacheable(clean_text):
-            cache.store(clean_text, voice_id, mode, provider_used, source_for_cache)
+            cache.store(clean_text, cache_voice_key, mode, provider_used, source_for_cache)
 
         if source_for_cache and source_for_cache.exists() and source_for_cache != output_path:
             try:
@@ -271,6 +272,8 @@ class TTSManager:
             "cacheEnabled": False,
             "cacheFolder": "cache/tts_cache",
             "elevenlabsGainDb": 12.0,
+            "voiceSpeed": 1.0,
+            "pitchSemitones": 0.0,
             "voices": {
                 "conversation": {"voice_id": "talia", "display_name": "Talia"},
                 "story": {"voice_id": "florence", "display_name": "Florence"},
@@ -325,6 +328,63 @@ class TTSManager:
             gain = 12.0
         return max(-6.0, min(12.0, gain))
 
+    def voice_speed(self, config: dict[str, Any] | None) -> float:
+        """Return the configured output speed multiplier."""
+        raw_speed = (config or {}).get("voiceSpeed", 1.0)
+        try:
+            speed = float(raw_speed)
+        except (TypeError, ValueError):
+            speed = 1.0
+        return max(0.7, min(1.4, speed))
+
+    def pitch_semitones(self, config: dict[str, Any] | None) -> float:
+        """Return the configured pitch shift in semitones."""
+        raw_pitch = (config or {}).get("pitchSemitones", 0.0)
+        try:
+            pitch = float(raw_pitch)
+        except (TypeError, ValueError):
+            pitch = 0.0
+        return max(-6.0, min(6.0, pitch))
+
+    def cache_voice_key(self, voice_id: str, mode: str, config: dict[str, Any]) -> str:
+        """Include audio-shaping settings in the TTS cache key."""
+        speed = self.voice_speed(config)
+        pitch = self.pitch_semitones(config)
+        gain = self.elevenlabs_gain_db(config)
+        return f"{voice_id}|mode={mode}|speed={speed:.2f}|pitch={pitch:.1f}|gain={gain:.1f}"
+
+    def atempo_filters(self, tempo: float) -> list[str]:
+        """Split tempo into ffmpeg atempo stages, each within the accepted 0.5-2.0 range."""
+        stages: list[str] = []
+        tempo = max(0.25, min(4.0, tempo))
+        while tempo < 0.5:
+            stages.append("atempo=0.5")
+            tempo /= 0.5
+        while tempo > 2.0:
+            stages.append("atempo=2.0")
+            tempo /= 2.0
+        stages.append(f"atempo={tempo:.4f}")
+        return stages
+
+    def audio_filter_chain(self, config: dict[str, Any] | None, provider: str) -> list[str]:
+        """Build ffmpeg filters for volume, pitch, and speed."""
+        filters: list[str] = []
+        gain_db = self.elevenlabs_gain_db(config) if provider.lower() == "elevenlabs" else 0.0
+        if abs(gain_db) >= 0.1:
+            filters.append(f"volume={gain_db:g}dB")
+
+        speed = self.voice_speed(config)
+        pitch = self.pitch_semitones(config)
+        pitch_factor = 2 ** (pitch / 12.0)
+        if abs(pitch) >= 0.05:
+            filters.append("aresample=22050")
+            filters.append(f"asetrate={22050 * pitch_factor:.3f}")
+            filters.append("aresample=22050")
+            speed = speed / pitch_factor
+        if abs(speed - 1.0) >= 0.01:
+            filters.extend(self.atempo_filters(speed))
+        return filters
+
     def _prepare_output(
         self,
         source_path: Path,
@@ -333,7 +393,8 @@ class TTSManager:
         provider: str = "",
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if source_path.suffix.lower() == ".wav":
+        filters = self.audio_filter_chain(config, provider)
+        if source_path.suffix.lower() == ".wav" and not filters:
             shutil.copyfile(source_path, output_path)
             return
 
@@ -351,14 +412,12 @@ class TTSManager:
             str(source_path),
             "-ac",
             "1",
-            "-ar",
-            "22050",
             "-sample_fmt",
             "s16",
         ]
-        gain_db = self.elevenlabs_gain_db(config) if provider.lower() == "elevenlabs" else 0.0
-        if abs(gain_db) >= 0.1:
-            command.extend(["-af", f"volume={gain_db:g}dB"])
+        if filters:
+            command.extend(["-af", ",".join(filters)])
+        command.extend(["-ar", "22050"])
         command.append(str(temp_path))
         result = subprocess.run(
             command,
