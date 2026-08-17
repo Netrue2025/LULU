@@ -624,7 +624,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("teddy-server")
 tts_manager = TTSManager(
-    config_path=BASE_DIR / "config" / "tts.json",
+    config_path=storage.get_data_path("settings/tts.json"),
     data_dir=storage.DATA_DIR,
     audio_dir=AUDIO_DIR,
     elevenlabs_provider=ElevenLabsProvider(),
