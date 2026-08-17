@@ -180,6 +180,7 @@ using ChatNetworkClient = WiFiClient;
 #define CHAT_AUDIO_PATH "/audio/reply.wav"
 #define RADIO_STREAM_PATH "/radio/nigeria.pcm"
 #define REMOTE_COMMAND_PATH "/remote/next?device_id=esp32-lulu"
+#define MESSAGE_READOUT_PATH "/api/messages/readout"
 #define REMOTE_STATUS_PATH "/remote/status"
 #define REMOTE_DEVICE_STATUS_PATH "/remote/device-status"
 #define REMOTE_SD_NEXT_PATH "/remote/sd/next?device_id=esp32-lulu"
@@ -294,6 +295,9 @@ using ChatNetworkClient = WiFiClient;
 #ifndef TOUCH_DOUBLE_TAP_WINDOW_MS
 #define TOUCH_DOUBLE_TAP_WINDOW_MS 850
 #endif
+#ifndef TOUCH_TRIPLE_TAP_WINDOW_MS
+#define TOUCH_TRIPLE_TAP_WINDOW_MS 850
+#endif
 #ifndef TOUCH_DEBOUNCE_MS
 #define TOUCH_DEBOUNCE_MS 35
 #endif
@@ -381,6 +385,7 @@ struct RemoteCommand
 
 bool runConversationTurn(bool quietIsError, const String &listenPrompt);
 bool checkRemoteStopRequested();
+bool readRemoteMessages();
 String baseNameFromPath(String path);
 void enterDeepSleep();
 
@@ -2972,6 +2977,65 @@ bool speakText(const String &speechText)
   return ok;
 }
 
+bool readRemoteMessages()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    showText("WiFi offline", "Cannot read messages");
+    return false;
+  }
+
+  HTTPClient http;
+  ChatNetworkClient client;
+  prepareChatClient(client, 6000);
+  String url = buildServerUrl(MESSAGE_READOUT_PATH);
+
+  if (!http.begin(client, url))
+  {
+    client.stop();
+    showText("Messages", "Server offline");
+    return false;
+  }
+
+  http.setTimeout(6000);
+  int code = http.GET();
+  String response = http.getString();
+  http.end();
+  client.stop();
+
+  if (code != HTTP_CODE_OK || response.length() == 0)
+  {
+    lastServerError = "Messages HTTP " + String(code);
+    showWrapped("Messages failed", lastServerError);
+    return false;
+  }
+
+  DynamicJsonDocument doc(3072);
+  DeserializationError error = deserializeJson(doc, response);
+  if (error)
+  {
+    lastServerError = "Bad messages JSON";
+    showText("Messages", "JSON error");
+    return false;
+  }
+
+  String speech = doc["speech_text"] | "You do not have any pending messages.";
+  String display = doc["display_text"] | speech;
+  speech.trim();
+  display.trim();
+  if (speech.length() == 0)
+    speech = "You do not have any pending messages.";
+  if (display.length() == 0)
+    display = speech;
+
+  showWrapped("Messages", display);
+  bool ok = speakText(speech);
+  setIdleState();
+  showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
+           WiFi.status() == WL_CONNECTED ? "Press TALK" : "Check router");
+  return ok;
+}
+
 bool handleReminderCommand(const String &transcription)
 {
   char response[180];
@@ -3641,6 +3705,24 @@ bool handleRemoteControl()
     showWrapped("Remote", command.text);
     speakText(command.text);
     return true;
+  }
+
+  if (command.action == "message_notify")
+  {
+    if (command.text.length() == 0)
+      command.text = "Hello Jeremiah, You have a message.";
+
+    LedManager.setMode(LED_NOTIFICATION);
+    showWrapped("Message", command.text);
+    speakText(command.text);
+    LedManager.setMode(LED_NOTIFICATION);
+    showText("Message", "Say read messages", "or triple tap");
+    return true;
+  }
+
+  if (command.action == "read_messages")
+  {
+    return readRemoteMessages();
   }
 
   if (command.action == "radio")
@@ -4425,6 +4507,19 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
   if (handleVolumeAction(reply.action))
     return true;
 
+  if (reply.action == "read_messages")
+  {
+    String messageText = reply.text;
+    messageText.trim();
+    if (messageText.length() == 0)
+      return readRemoteMessages();
+
+    showWrapped("Messages", messageText);
+    speakText(messageText);
+    setIdleState();
+    return true;
+  }
+
   if (reply.action == "music")
   {
     if (reply.text.length() > 0)
@@ -4678,6 +4773,44 @@ bool waitForSecondMusicTap()
           return true;
         }
         updateStatusLeds();
+        delay(10);
+      }
+
+      consumeRecordButtonInterrupt();
+      unsigned long thirdWindowStartedMs = millis();
+      showText("Tap again", "Read messages");
+      while (millis() - thirdWindowStartedMs < TOUCH_TRIPLE_TAP_WINDOW_MS)
+      {
+        updateStatusLeds();
+        handleSDFileManager();
+
+        bool thirdTapRaw = isRecordButtonPressed();
+        if (thirdTapRaw || consumeRecordButtonInterrupt())
+        {
+          unsigned long thirdPressStartedMs = millis();
+          unsigned long thirdDebounceStartedMs = millis();
+          while (millis() - thirdDebounceStartedMs < TOUCH_DEBOUNCE_MS)
+          {
+            updateStatusLeds();
+            delay(5);
+          }
+
+          while (thirdTapRaw && isRecordButtonPressed())
+          {
+            if (millis() - thirdPressStartedMs >= TOUCH_LONG_PRESS_MS)
+            {
+              enterDeepSleep();
+              return true;
+            }
+            updateStatusLeds();
+            delay(10);
+          }
+
+          showText("Messages", "Reading inbox");
+          readRemoteMessages();
+          return true;
+        }
+
         delay(10);
       }
 

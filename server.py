@@ -1037,6 +1037,197 @@ def create_voice_reminder_if_needed(transcription: str) -> dict[str, Any] | None
     return create_reminder(payload)
 
 
+MESSAGES_PATH = "messages/messages.json"
+MESSAGE_STATUSES = {"scheduled", "pending", "delivered", "read"}
+READ_MESSAGES_RE = re.compile(
+    r"\b(?:read|open|check|play|tell\s+me|say)\b.*\b(?:message|messages|inbox)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_message_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return _now_iso()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Send time must be an ISO datetime") from exc
+    return parsed.isoformat(timespec="seconds")
+
+
+def _message_datetime(value: Any) -> datetime:
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now()
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _normalize_message(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    message_id = str(raw.get("id") or "").strip()
+    sender = str(raw.get("sender") or raw.get("from") or "").strip()
+    body = str(raw.get("message") or raw.get("text") or "").strip()
+    if not message_id or not sender or not body:
+        return None
+
+    status = str(raw.get("status") or "pending").strip().lower()
+    if status not in MESSAGE_STATUSES:
+        status = "pending"
+    send_at = str(raw.get("sendAt") or raw.get("send_at") or raw.get("scheduleTime") or "").strip() or _now_iso()
+    created_at = str(raw.get("createdAt") or raw.get("created_at") or "").strip() or _now_iso()
+    updated_at = str(raw.get("updatedAt") or raw.get("updated_at") or "").strip() or created_at
+
+    normalized = {
+        "id": message_id,
+        "sender": sender[:80],
+        "message": body[:800],
+        "sendAt": send_at,
+        "status": status,
+        "source": str(raw.get("source") or "dashboard").strip()[:40] or "dashboard",
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    }
+    for key in ("deliveredAt", "readAt"):
+        value = str(raw.get(key) or raw.get(key.replace("At", "_at")) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def load_messages() -> list[dict[str, Any]]:
+    items = storage.load_json(MESSAGES_PATH, storage.DEFAULT_MESSAGES)
+    if not isinstance(items, list):
+        items = []
+    messages = [item for item in (_normalize_message(item) for item in items) if item is not None]
+    messages.sort(key=lambda item: (_message_datetime(item["sendAt"]), item["createdAt"]), reverse=True)
+    return messages
+
+
+def save_messages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages = [item for item in (_normalize_message(item) for item in items) if item is not None]
+    storage.save_json(MESSAGES_PATH, messages[:500])
+    return messages
+
+
+def _message_due(message: dict[str, Any]) -> bool:
+    return _message_datetime(message.get("sendAt")) <= datetime.now()
+
+
+def create_message(payload: dict[str, Any]) -> dict[str, Any]:
+    sender = str(payload.get("sender") or payload.get("from") or "").strip()
+    body = str(payload.get("message") or payload.get("text") or "").strip()
+    if not sender:
+        raise HTTPException(status_code=400, detail="Sender name is required")
+    if not body:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    send_at = _parse_message_time(payload.get("sendAt") or payload.get("send_at") or payload.get("scheduleTime"))
+    status = "pending" if _message_datetime(send_at) <= datetime.now() else "scheduled"
+    message = {
+        "id": uuid.uuid4().hex[:12],
+        "sender": sender[:80],
+        "message": body[:800],
+        "sendAt": send_at,
+        "status": status,
+        "source": str(payload.get("source") or "dashboard").strip()[:40] or "dashboard",
+        "createdAt": _now_iso(),
+        "updatedAt": _now_iso(),
+    }
+    messages = load_messages()
+    messages.insert(0, message)
+    save_messages(messages)
+    append_activity(f"Message queued from {message['sender']} for {message['sendAt']}")
+    return message
+
+
+def message_payload() -> dict[str, Any]:
+    messages = load_messages()
+    due_unread = [item for item in messages if item.get("status") != "read" and _message_due(item)]
+    pending = [item for item in messages if item.get("status") != "read"]
+    scheduled = [item for item in messages if item.get("status") == "scheduled" and not _message_due(item)]
+    recent = messages[:60]
+    return {
+        "messages": recent,
+        "pending": pending[:60],
+        "scheduled": scheduled[:40],
+        "unread": due_unread[:40],
+        "unreadCount": len(due_unread),
+        "pendingCount": len(pending),
+    }
+
+
+def next_due_message_notification(device_id: str = "lulu") -> dict[str, Any] | None:
+    messages = load_messages()
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("status") not in {"scheduled", "pending"} or not _message_due(message):
+            continue
+        updated = {
+            **message,
+            "status": "delivered",
+            "deliveredAt": _now_iso(),
+            "updatedAt": _now_iso(),
+        }
+        messages[index] = updated
+        save_messages(messages)
+        sender = updated["sender"]
+        text = f"Hello Jeremiah, You have a message from {sender}."
+        append_activity(f"Message delivered to {device_id} from {sender}")
+        return {
+            "id": f"message-{updated['id']}",
+            "action": "message_notify",
+            "text": text,
+            "messageId": updated["id"],
+            "sender": sender,
+        }
+    return None
+
+
+def build_messages_readout(mark_read: bool = True) -> dict[str, Any]:
+    messages = load_messages()
+    read_items = [
+        item
+        for item in messages
+        if item.get("status") != "read" and _message_due(item)
+    ]
+    read_items.sort(key=lambda item: _message_datetime(item.get("sendAt")))
+    if not read_items:
+        speech = "You do not have any pending messages."
+        return {"speech_text": speech, "display_text": speech, "messages": []}
+
+    parts = []
+    for item in read_items[:10]:
+        parts.append(f"From {item['sender']}: {item['message']}")
+    speech = f"You have {len(read_items)} message{'s' if len(read_items) != 1 else ''}. " + " ".join(parts)
+
+    if mark_read:
+        read_ids = {item["id"] for item in read_items}
+        now = _now_iso()
+        updated_messages = []
+        for item in messages:
+            if item["id"] in read_ids:
+                item = {**item, "status": "read", "readAt": now, "updatedAt": now}
+            updated_messages.append(item)
+        save_messages(updated_messages)
+        append_activity(f"Messages read: {len(read_items)}")
+
+    display = "\n".join(parts[:4])
+    return {"speech_text": speech, "display_text": display, "messages": read_items}
+
+
+def is_read_messages_request(transcription: str) -> bool:
+    normalized = strip_voice_address(transcription)
+    return bool(READ_MESSAGES_RE.search(normalized))
+
+
 def update_reminder(reminder_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     reminders = load_reminders()
     clean_id = str(reminder_id or "").strip()
@@ -3165,6 +3356,12 @@ def generate_reply(
     if is_volume_down_request(transcription):
         return remember(TeddyReply(speech_text="", display_text="Turning volume down.", action="volume_down"))
 
+    if is_read_messages_request(transcription):
+        readout = build_messages_readout(mark_read=True)
+        text = str(readout.get("speech_text") or "You do not have any pending messages.")
+        display = str(readout.get("display_text") or text)
+        return remember(TeddyReply(speech_text=text, display_text=display, action="read_messages"))
+
     voice_reminder = create_voice_reminder_if_needed(transcription)
     if voice_reminder:
         schedule = str(voice_reminder.get("scheduleTime") or "")
@@ -3423,7 +3620,7 @@ async def enqueue_remote_command(request: Request) -> JSONResponse:
 
     action = str(payload.get("action", "")).strip().lower()
     text = str(payload.get("text", "")).strip()
-    allowed_actions = {"speak", "radio", "stop", "ready", "listen"}
+    allowed_actions = {"speak", "radio", "stop", "ready", "listen", "read_messages"}
 
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Unsupported remote action")
@@ -3454,6 +3651,10 @@ async def enqueue_remote_command(request: Request) -> JSONResponse:
 
 @app.get("/remote/next")
 def get_next_remote_command(device_id: str = "lulu") -> JSONResponse:
+    message_command = next_due_message_notification(device_id=device_id)
+    if message_command:
+        return JSONResponse({"command": message_command})
+
     with remote_command_lock:
         state = storage.load_json("dashboard/remote_commands.json", storage.DEFAULT_REMOTE_COMMANDS)
         if not isinstance(state, dict):
@@ -3704,6 +3905,25 @@ def api_clear_reminder_history() -> JSONResponse:
     return JSONResponse(reminder_payload())
 
 
+@app.get("/api/messages")
+def api_messages() -> JSONResponse:
+    return JSONResponse(message_payload())
+
+
+@app.post("/api/messages")
+async def api_create_message(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid message payload")
+    message = create_message(payload)
+    return JSONResponse({"message": message, **message_payload()})
+
+
+@app.get("/api/messages/readout")
+def api_messages_readout() -> JSONResponse:
+    return JSONResponse(build_messages_readout(mark_read=True))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {
@@ -3748,6 +3968,7 @@ def dashboard_overview() -> dict[str, Any]:
         "activities": activities,
         "bible": read_bible_session_status(),
         "device_status": read_remote_device_status(),
+        "messages": message_payload(),
     }
 
 
