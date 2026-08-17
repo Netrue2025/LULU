@@ -60,6 +60,8 @@ COMMON_PHRASES = (
     "Good night.",
 )
 
+ESP32_TTS_SAMPLE_RATE = 16000
+
 
 @dataclass(frozen=True)
 class TTSResult:
@@ -368,7 +370,7 @@ class TTSManager:
         speed = self.voice_speed(config)
         pitch = self.pitch_semitones(config)
         gain = self.elevenlabs_gain_db(config)
-        return f"{voice_id}|mode={mode}|speed={speed:.2f}|pitch={pitch:.1f}|gain={gain:.1f}"
+        return f"{voice_id}|mode={mode}|speed={speed:.2f}|pitch={pitch:.1f}|gain={gain:.1f}|sr={ESP32_TTS_SAMPLE_RATE}"
 
     def atempo_filters(self, tempo: float) -> list[str]:
         """Split tempo into ffmpeg atempo stages, each within the accepted 0.5-2.0 range."""
@@ -394,9 +396,9 @@ class TTSManager:
         pitch = self.pitch_semitones(config)
         pitch_factor = 2 ** (pitch / 12.0)
         if abs(pitch) >= 0.05:
-            filters.append("aresample=22050")
-            filters.append(f"asetrate={22050 * pitch_factor:.3f}")
-            filters.append("aresample=22050")
+            filters.append(f"aresample={ESP32_TTS_SAMPLE_RATE}")
+            filters.append(f"asetrate={ESP32_TTS_SAMPLE_RATE * pitch_factor:.3f}")
+            filters.append(f"aresample={ESP32_TTS_SAMPLE_RATE}")
             speed = speed / pitch_factor
         if abs(speed - 1.0) >= 0.01:
             filters.extend(self.atempo_filters(speed))
@@ -427,6 +429,8 @@ class TTSManager:
             "error",
             "-i",
             str(source_path),
+            "-map_metadata",
+            "-1",
             "-ac",
             "1",
             "-sample_fmt",
@@ -434,7 +438,7 @@ class TTSManager:
         ]
         if filters:
             command.extend(["-af", ",".join(filters)])
-        command.extend(["-ar", "22050"])
+        command.extend(["-ar", str(ESP32_TTS_SAMPLE_RATE), "-bitexact"])
         command.append(str(temp_path))
         result = subprocess.run(
             command,
