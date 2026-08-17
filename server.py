@@ -1851,6 +1851,10 @@ def tts_voice_signature(mode: str = "conversation") -> str:
     return f"{provider}|{tts_manager.cache_voice_key(voice_id, normalized_mode, config)}"
 
 
+def tts_configured_provider() -> str:
+    return str(tts_manager.load_config().get("provider", "elevenlabs")).strip().lower() or "elevenlabs"
+
+
 def sd_reply_audio_cache_key(reply: TeddyReply, mode: str = "conversation") -> str:
     return hashlib.sha256(f"{reply.action}\0{tts_voice_signature(mode)}\0{reply.speech_text}".encode("utf-8")).hexdigest()[:24]
 
@@ -1894,7 +1898,10 @@ def find_popular_response_cache(transcription: str) -> dict[str, Any] | None:
             entry_voice_signature = str(raw_entry.get("voice_signature", "")).strip()
             if not candidate_key or not file_name:
                 continue
-            if entry_voice_signature and entry_voice_signature != current_voice_signature:
+            if entry_voice_signature != current_voice_signature:
+                continue
+            entry_provider = str(raw_entry.get("provider", "")).strip().lower()
+            if entry_provider and entry_provider != tts_configured_provider():
                 continue
             score = 1.0 if question_key == candidate_key else SequenceMatcher(None, question_key, candidate_key).ratio()
             if question_key in candidate_key or candidate_key in question_key:
@@ -1963,6 +1970,9 @@ def record_popular_response_candidate(
 
     question_key = normalize_question_key(transcription)
     if not question_key:
+        return
+
+    if provider and provider.strip().lower() != tts_configured_provider():
         return
 
     current_voice_signature = tts_voice_signature()

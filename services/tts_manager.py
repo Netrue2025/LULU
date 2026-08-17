@@ -114,22 +114,32 @@ class TTSManager:
 
         cache_hit = False
         fallback_used = False
-        provider_used = str(config.get("provider", "elevenlabs")).lower()
+        configured_provider = str(config.get("provider", "elevenlabs")).lower()
+        provider_used = configured_provider
         source_for_cache: Path | None = None
 
         cache_voice_key = self.cache_voice_key(voice_id, mode, config)
         if cache and cache.is_cacheable(clean_text):
             entry = cache.lookup(clean_text, cache_voice_key, mode)
             if entry:
-                self._prepare_output(cache.path_for(entry), output_path, config, entry.provider)
+                cached_provider = entry.provider.strip().lower()
+                if cached_provider == configured_provider:
+                    self._prepare_output(cache.path_for(entry), output_path, config, entry.provider)
+                    self.logger.info(
+                        "TTS cache hit mode=%s voice=%s provider=%s text_len=%u",
+                        mode,
+                        voice_id,
+                        entry.provider,
+                        len(clean_text),
+                    )
+                    return TTSResult(output_path, entry.provider, voice_id, mode, True, False, time.perf_counter() - started)
                 self.logger.info(
-                    "TTS cache hit mode=%s voice=%s provider=%s text_len=%u",
+                    "Ignoring TTS cache provider mismatch configured=%s cached=%s mode=%s voice=%s",
+                    configured_provider,
+                    cached_provider,
                     mode,
                     voice_id,
-                    entry.provider,
-                    len(clean_text),
                 )
-                return TTSResult(output_path, entry.provider, voice_id, mode, True, False, time.perf_counter() - started)
 
         self.logger.info(
             "TTS cache %s mode=%s voice=%s text_len=%u",
@@ -162,7 +172,7 @@ class TTSManager:
             self._prepare_output(wav_path, output_path, config, provider_used)
             source_for_cache = wav_path
 
-        if cache and cache.is_cacheable(clean_text):
+        if cache and cache.is_cacheable(clean_text) and provider_used == configured_provider and not fallback_used:
             cache.store(clean_text, cache_voice_key, mode, provider_used, source_for_cache)
 
         if source_for_cache and source_for_cache.exists() and source_for_cache != output_path:

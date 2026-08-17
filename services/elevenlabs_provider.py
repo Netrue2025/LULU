@@ -20,10 +20,11 @@ class ElevenLabsVoice:
 class ElevenLabsProvider:
     """Generate speech and discover voices through the ElevenLabs API."""
 
-    def __init__(self, api_key: str | None = None, model_id: str | None = None, timeout_seconds: float = 20) -> None:
+    def __init__(self, api_key: str | None = None, model_id: str | None = None, timeout_seconds: float = 45) -> None:
         self.api_key = (api_key or os.getenv("ELEVENLABS_API_KEY", "")).strip()
         self.model_id = (model_id or os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")).strip()
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = float(os.getenv("ELEVENLABS_TIMEOUT_SECONDS", str(timeout_seconds)))
+        self.retry_count = max(1, int(os.getenv("ELEVENLABS_RETRY_COUNT", "2")))
         self.base_url = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1").rstrip("/")
 
     @property
@@ -71,23 +72,36 @@ class ElevenLabsProvider:
             raise RuntimeError("ElevenLabs API key is not configured")
 
         started = time.perf_counter()
-        response = requests.post(
-            f"{self.base_url}/text-to-speech/{voice_id}",
-            headers={
-                "xi-api-key": self.api_key,
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": text,
-                "model_id": self.model_id,
-                "voice_settings": {"stability": 0.45, "similarity_boost": 0.75},
-            },
-            timeout=self.timeout_seconds,
-        )
-        self._raise_for_auth_or_status(response, "generating speech")
-        if not response.content:
-            raise RuntimeError("ElevenLabs returned empty audio")
+        response: requests.Response | None = None
+        last_error: Exception | None = None
+        for attempt in range(1, self.retry_count + 1):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/text-to-speech/{voice_id}",
+                    headers={
+                        "xi-api-key": self.api_key,
+                        "Accept": "audio/mpeg",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "text": text,
+                        "model_id": self.model_id,
+                        "voice_settings": {"stability": 0.45, "similarity_boost": 0.75},
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                self._raise_for_auth_or_status(response, "generating speech")
+                if response.content:
+                    break
+                last_error = RuntimeError("ElevenLabs returned empty audio")
+            except Exception as exc:
+                last_error = exc
+                if attempt >= self.retry_count:
+                    raise
+                time.sleep(0.6 * attempt)
+
+        if response is None or not response.content:
+            raise RuntimeError(str(last_error or "ElevenLabs returned empty audio"))
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(response.content)
