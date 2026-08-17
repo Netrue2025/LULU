@@ -407,6 +407,7 @@ bool lastRecordingTooQuiet = false;
 bool lastFollowupUnclear = false;
 bool lastPlaybackStoppedByButton = false;
 bool lastStopRequested = false;
+bool unreadMessagePending = false;
 unsigned long lastButtonWarningMs = 0;
 String lastServerError = "";
 uint8_t playbackVolumePercent = DEFAULT_PLAYBACK_VOLUME;
@@ -456,7 +457,7 @@ void setState(TeddyState state)
   switch (currentState)
   {
   case TeddyState::IDLE:
-    LedManager.setMode(LED_IDLE);
+    LedManager.setMode(unreadMessagePending ? LED_MESSAGE_UNREAD : LED_IDLE);
     break;
   case TeddyState::LISTENING:
     LedManager.setMode(LED_LISTENING);
@@ -2977,6 +2978,31 @@ bool speakText(const String &speechText)
   return ok;
 }
 
+bool playMessageNotificationAudio(const String &speechText)
+{
+  String audioCacheKey = localReplyAudioCacheKey("message_notify", speechText);
+  if (sdReady && ensureReplyCacheDirectory())
+  {
+    String cachePath = replyAudioCachePath(audioCacheKey);
+    if (cachePath.length() > 0 && SD.exists(cachePath))
+    {
+      Serial.println("[MESSAGE] Notification audio SD cache hit: " + cachePath);
+      bool playedCached = playReplyWavFromSD(cachePath.c_str(), speechText, true);
+      if (playedCached)
+        return true;
+      Serial.println("[MESSAGE] Cached notification audio invalid, removing: " + cachePath);
+      SD.remove(cachePath);
+    }
+  }
+
+  String audioUrl;
+  if (!requestSpeechAudio(speechText, &audioUrl))
+    return false;
+
+  Serial.println("[MESSAGE] Downloading notification audio to SD before playback");
+  return downloadAndPlayWav(audioUrl, speechText, false, true, audioCacheKey);
+}
+
 bool readRemoteMessages()
 {
   if (WiFi.status() != WL_CONNECTED)
@@ -3030,6 +3056,7 @@ bool readRemoteMessages()
 
   showWrapped("Messages", display);
   bool ok = speakText(speech);
+  unreadMessagePending = false;
   setIdleState();
   showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
            WiFi.status() == WL_CONNECTED ? "Press TALK" : "Check router");
@@ -3712,10 +3739,12 @@ bool handleRemoteControl()
     if (command.text.length() == 0)
       command.text = "Hello Jeremiah, You have a message.";
 
-    LedManager.setMode(LED_NOTIFICATION);
+    unreadMessagePending = true;
+    setIdleState();
     showWrapped("Message", command.text);
-    speakText(command.text);
-    LedManager.setMode(LED_NOTIFICATION);
+    playMessageNotificationAudio(command.text);
+    unreadMessagePending = true;
+    setIdleState();
     showText("Message", "Say read messages", "or triple tap");
     return true;
   }
@@ -4516,6 +4545,7 @@ bool runConversationTurn(bool quietIsError, const String &listenPrompt)
 
     showWrapped("Messages", messageText);
     speakText(messageText);
+    unreadMessagePending = false;
     setIdleState();
     return true;
   }
@@ -4742,22 +4772,28 @@ bool isRecordButtonPressed()
   return isTalkButtonPressedRaw();
 }
 
-bool waitForSecondMusicTap()
+enum TouchTapResult
 {
-  // Clear the first tap's interrupt so it cannot be mistaken for the second tap.
+  TOUCH_TAP_NONE,
+  TOUCH_TAP_DETECTED,
+  TOUCH_TAP_SLEEP
+};
+
+TouchTapResult waitForTapWindow(uint32_t windowMs, const String &line1, const String &line2)
+{
   consumeRecordButtonInterrupt();
   unsigned long windowStartedMs = millis();
-  showText("Tap again", "Music mode");
+  showText(line1, line2);
 
-  while (millis() - windowStartedMs < TOUCH_DOUBLE_TAP_WINDOW_MS)
+  while (millis() - windowStartedMs < windowMs)
   {
     updateStatusLeds();
     handleSDFileManager();
 
-    bool secondTapRaw = isRecordButtonPressed();
-    if (secondTapRaw || consumeRecordButtonInterrupt())
+    bool rawTap = isRecordButtonPressed();
+    if (rawTap || consumeRecordButtonInterrupt())
     {
-      unsigned long secondPressStartedMs = millis();
+      unsigned long pressStartedMs = millis();
       unsigned long debounceStartedMs = millis();
       while (millis() - debounceStartedMs < TOUCH_DEBOUNCE_MS)
       {
@@ -4765,68 +4801,52 @@ bool waitForSecondMusicTap()
         delay(5);
       }
 
-      while (secondTapRaw && isRecordButtonPressed())
+      while (isRecordButtonPressed())
       {
-        if (millis() - secondPressStartedMs >= TOUCH_LONG_PRESS_MS)
+        if (millis() - pressStartedMs >= TOUCH_LONG_PRESS_MS)
         {
           enterDeepSleep();
-          return true;
+          return TOUCH_TAP_SLEEP;
         }
         updateStatusLeds();
         delay(10);
       }
 
       consumeRecordButtonInterrupt();
-      unsigned long thirdWindowStartedMs = millis();
-      showText("Tap again", "Read messages");
-      while (millis() - thirdWindowStartedMs < TOUCH_TRIPLE_TAP_WINDOW_MS)
-      {
-        updateStatusLeds();
-        handleSDFileManager();
-
-        bool thirdTapRaw = isRecordButtonPressed();
-        if (thirdTapRaw || consumeRecordButtonInterrupt())
-        {
-          unsigned long thirdPressStartedMs = millis();
-          unsigned long thirdDebounceStartedMs = millis();
-          while (millis() - thirdDebounceStartedMs < TOUCH_DEBOUNCE_MS)
-          {
-            updateStatusLeds();
-            delay(5);
-          }
-
-          while (thirdTapRaw && isRecordButtonPressed())
-          {
-            if (millis() - thirdPressStartedMs >= TOUCH_LONG_PRESS_MS)
-            {
-              enterDeepSleep();
-              return true;
-            }
-            updateStatusLeds();
-            delay(10);
-          }
-
-          showText("Messages", "Reading inbox");
-          readRemoteMessages();
-          return true;
-        }
-
-        delay(10);
-      }
-
-      showText("Music mode", "Playing SD");
-      if (!playMusicFromSD())
-        showWrapped("Music failed", lastServerError);
-      setIdleState();
-      showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
-               WiFi.status() == WL_CONNECTED ? "Press TALK" : "Double tap music");
-      return true;
+      return TOUCH_TAP_DETECTED;
     }
 
     delay(10);
   }
 
-  return false;
+  return TOUCH_TAP_NONE;
+}
+
+bool waitForSecondMusicTap()
+{
+  TouchTapResult secondTap = waitForTapWindow(TOUCH_DOUBLE_TAP_WINDOW_MS, "Tap again", "Music mode");
+  if (secondTap == TOUCH_TAP_NONE)
+    return false;
+  if (secondTap == TOUCH_TAP_SLEEP)
+    return true;
+
+  TouchTapResult thirdTap = waitForTapWindow(TOUCH_TRIPLE_TAP_WINDOW_MS, "Tap again", "Read messages");
+  if (thirdTap == TOUCH_TAP_SLEEP)
+    return true;
+  if (thirdTap == TOUCH_TAP_DETECTED)
+  {
+    showText("Messages", "Reading inbox");
+    readRemoteMessages();
+    return true;
+  }
+
+  showText("Music mode", "Playing SD");
+  if (!playMusicFromSD())
+    showWrapped("Music failed", lastServerError);
+  setIdleState();
+  showText(WiFi.status() == WL_CONNECTED ? "Ready" : "WiFi offline",
+           WiFi.status() == WL_CONNECTED ? "Press TALK" : "Double tap music");
+  return true;
 }
 
 void showButtonPinWarning()

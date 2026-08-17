@@ -368,6 +368,13 @@ static void renderNotification(unsigned long elapsedMs)
   fillFrame(on ? NOTIFICATION_COLOR : LED_RGB(0, 0, 0));
 }
 
+static void renderMessageUnread(unsigned long elapsedMs)
+{
+  // Unread message: continuous slow red breathing until the inbox is read.
+  uint8_t scale = triangleWave(elapsedMs, 3200, 8, 150);
+  fillFrame(scaleColor(ERROR_COLOR, scale));
+}
+
 static void renderSuccess(unsigned long elapsedMs)
 {
   // Success: a green spiral makes one full clockwise rotation before restoring the previous mode.
@@ -493,6 +500,9 @@ void LedManagerClass::update()
     break;
   case LED_NOTIFICATION:
     renderNotification(elapsedMs);
+    break;
+  case LED_MESSAGE_UNREAD:
+    renderMessageUnread(elapsedMs);
     break;
   case LED_SUCCESS:
     renderSuccess(elapsedMs);
