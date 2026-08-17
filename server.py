@@ -4448,7 +4448,15 @@ async def api_tts_speak(request: Request) -> JSONResponse:
         )
     except Exception as exc:
         logger.exception("TTS speak failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                "fallback_reason": str(exc),
+                "fallback_used": False,
+                "provider": tts_manager.config.provider,
+            },
+            status_code=502,
+        )
 
 
 @app.get("/api/tts/voices")
