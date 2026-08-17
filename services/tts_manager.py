@@ -230,16 +230,10 @@ class TTSManager:
             if display and name.lower() == display:
                 return voice_id
 
-        fallback_voice_id = str(voices[0].get("voice_id", "")).strip()
-        fallback_name = str(voices[0].get("display_name", fallback_voice_id)).strip()
-        if not fallback_voice_id:
-            raise RuntimeError("ElevenLabs voice list did not include a usable voice_id")
-        self.logger.warning(
-            "Configured ElevenLabs voice %r was not found; using %r instead. Choose a real voice in Dashboard > Settings.",
-            configured_voice_id,
-            fallback_name,
+        raise RuntimeError(
+            f"Configured ElevenLabs voice {configured_voice_id!r} was not found. "
+            "Choose an imported ElevenLabs voice in Dashboard > Settings."
         )
-        return fallback_voice_id
 
     def cache_summary(self) -> dict[str, Any]:
         """Return cache metadata and storage usage."""

@@ -1799,7 +1799,7 @@ def popular_cache_audio_dir() -> Path:
 
 
 def popular_cache_file_name(question_key: str, speech_text: str) -> str:
-    digest = hashlib.sha256(f"{question_key}\0{speech_text}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(f"{question_key}\0{speech_text}\0{tts_voice_signature()}".encode("utf-8")).hexdigest()[:16]
     return f"popular_{digest}.wav"
 
 
@@ -1842,8 +1842,17 @@ def is_sd_reply_audio_cache_candidate(transcription: str, reply: TeddyReply) -> 
     return True
 
 
-def sd_reply_audio_cache_key(reply: TeddyReply) -> str:
-    return hashlib.sha256(f"{reply.action}\0{reply.speech_text}".encode("utf-8")).hexdigest()[:24]
+def tts_voice_signature(mode: str = "conversation") -> str:
+    config = tts_manager.load_config()
+    normalized_mode = tts_manager.normalize_mode(mode)
+    voice = tts_manager.voice_for_mode(normalized_mode, config)
+    voice_id = voice.get("voice_id") or str(config.get("defaultVoice") or "default")
+    provider = str(config.get("provider", "elevenlabs")).strip().lower() or "elevenlabs"
+    return f"{provider}|{tts_manager.cache_voice_key(voice_id, normalized_mode, config)}"
+
+
+def sd_reply_audio_cache_key(reply: TeddyReply, mode: str = "conversation") -> str:
+    return hashlib.sha256(f"{reply.action}\0{tts_voice_signature(mode)}\0{reply.speech_text}".encode("utf-8")).hexdigest()[:24]
 
 
 def find_popular_response_cache(transcription: str) -> dict[str, Any] | None:
@@ -1867,6 +1876,7 @@ def find_popular_response_cache(transcription: str) -> dict[str, Any] | None:
     question_key = normalize_question_key(transcription)
     if not question_key:
         return None
+    current_voice_signature = tts_voice_signature()
 
     with reply_cache_lock:
         meta = storage.load_json(POPULAR_RESPONSE_CACHE_META, {})
@@ -1881,7 +1891,10 @@ def find_popular_response_cache(transcription: str) -> dict[str, Any] | None:
                 continue
             candidate_key = str(raw_entry.get("question_key", "")).strip()
             file_name = str(raw_entry.get("file", "")).strip()
+            entry_voice_signature = str(raw_entry.get("voice_signature", "")).strip()
             if not candidate_key or not file_name:
+                continue
+            if entry_voice_signature and entry_voice_signature != current_voice_signature:
                 continue
             score = 1.0 if question_key == candidate_key else SequenceMatcher(None, question_key, candidate_key).ratio()
             if question_key in candidate_key or candidate_key in question_key:
@@ -1936,7 +1949,13 @@ def prune_popular_response_cache(meta: dict[str, Any]) -> None:
         logger.info("Pruned popular response WAV cache file %s", key)
 
 
-def record_popular_response_candidate(transcription: str, reply: TeddyReply, wav_path: Path) -> None:
+def record_popular_response_candidate(
+    transcription: str,
+    reply: TeddyReply,
+    wav_path: Path,
+    provider: str = "",
+    voice_id: str = "",
+) -> None:
     if not is_popular_response_cache_candidate(transcription, reply):
         return
     if not wav_path.exists() or wav_path.stat().st_size < 44:
@@ -1946,7 +1965,8 @@ def record_popular_response_candidate(transcription: str, reply: TeddyReply, wav
     if not question_key:
         return
 
-    entry_key = hashlib.sha256(question_key.encode("utf-8")).hexdigest()[:16]
+    current_voice_signature = tts_voice_signature()
+    entry_key = hashlib.sha256(f"{question_key}\0{current_voice_signature}".encode("utf-8")).hexdigest()[:16]
     now = time.time()
     with reply_cache_lock:
         meta = storage.load_json(POPULAR_RESPONSE_CACHE_META, {})
@@ -1964,6 +1984,9 @@ def record_popular_response_candidate(transcription: str, reply: TeddyReply, wav
                 "question_key": question_key,
                 "speech_text": reply.speech_text,
                 "display_text": reply.display_text,
+                "voice_signature": current_voice_signature,
+                "provider": provider,
+                "voice_id": voice_id,
                 "hits": 0,
                 "ready": False,
                 "file": "",
@@ -1975,6 +1998,9 @@ def record_popular_response_candidate(transcription: str, reply: TeddyReply, wav
         entry["last_seen_at"] = now
         entry["speech_text"] = reply.speech_text
         entry["display_text"] = reply.display_text
+        entry["voice_signature"] = current_voice_signature
+        entry["provider"] = provider or entry.get("provider", "")
+        entry["voice_id"] = voice_id or entry.get("voice_id", "")
 
         if not entry.get("ready") and int(entry["hits"]) >= POPULAR_RESPONSE_CACHE_MIN_HITS:
             file_name = popular_cache_file_name(question_key, reply.speech_text)
@@ -3519,9 +3545,9 @@ def generate_reply(
     return remember(reply)
 
 
-def synthesize_with_piper(text: str, output_path: Path, mode: str = "conversation") -> None:
+def synthesize_with_piper(text: str, output_path: Path, mode: str = "conversation") -> Any:
     """Generate a WAV file through the modular TTS manager."""
-    tts_manager.speak(text, mode=mode, output_path=output_path)
+    return tts_manager.speak(text, mode=mode, output_path=output_path)
 
 
 def find_wake_response_file() -> Path | None:
@@ -4355,7 +4381,7 @@ def speak(request: Request, text: str, mode: str = "conversation") -> JSONRespon
 
     try:
         with reply_lock:
-            synthesize_with_piper(speech_text, REPLY_WAV_PATH, mode=mode)
+            tts_result = synthesize_with_piper(speech_text, REPLY_WAV_PATH, mode=mode)
 
         tts_config = tts_manager.load_config()
         normalized_mode = tts_manager.normalize_mode(mode)
@@ -4369,6 +4395,9 @@ def speak(request: Request, text: str, mode: str = "conversation") -> JSONRespon
                 "text": speech_text,
                 "audio_url": public_url("/audio/reply.wav"),
                 "audio_cache_key": audio_cache_key,
+                "tts_provider": str(getattr(tts_result, "provider", "")),
+                "tts_voice_id": str(getattr(tts_result, "voice_id", "")),
+                "tts_fallback_used": bool(getattr(tts_result, "fallback_used", False)),
                 "action": "speak",
             }
         )
@@ -4505,24 +4534,41 @@ def chat(
             append_activity(key_activity)
 
         audio_url = ""
+        tts_provider = ""
+        tts_voice_id = ""
+        tts_fallback_used = False
         if reply.action == "wake":
             with reply_lock:
                 wake_audio_ready = prepare_wake_response_audio(WAKE_RESPONSE_WAV_PATH)
                 if not wake_audio_ready and reply.speech_text:
-                    synthesize_with_piper(reply.speech_text, REPLY_WAV_PATH)
+                    tts_result = synthesize_with_piper(reply.speech_text, REPLY_WAV_PATH)
+                    tts_provider = str(getattr(tts_result, "provider", ""))
+                    tts_voice_id = str(getattr(tts_result, "voice_id", ""))
+                    tts_fallback_used = bool(getattr(tts_result, "fallback_used", False))
 
             audio_url = public_url("/audio/wake_response.wav" if wake_audio_ready else "/audio/reply.wav")
         elif reply.action in {"speak", "story", "bible"} and reply.speech_text:
             with reply_lock:
                 if popular_audio_path:
                     shutil.copyfile(popular_audio_path, REPLY_WAV_PATH)
+                    tts_provider = str(popular_hit["entry"].get("provider", "cache")) if popular_hit else "cache"
+                    tts_voice_id = str(popular_hit["entry"].get("voice_id", "")) if popular_hit else ""
                 else:
-                    synthesize_with_piper(
+                    tts_result = synthesize_with_piper(
                         reply.speech_text,
                         REPLY_WAV_PATH,
                         mode="story" if reply.action in {"story", "bible"} else "conversation",
                     )
-                    record_popular_response_candidate(transcription, reply, REPLY_WAV_PATH)
+                    tts_provider = str(getattr(tts_result, "provider", ""))
+                    tts_voice_id = str(getattr(tts_result, "voice_id", ""))
+                    tts_fallback_used = bool(getattr(tts_result, "fallback_used", False))
+                    record_popular_response_candidate(
+                        transcription,
+                        reply,
+                        REPLY_WAV_PATH,
+                        provider=tts_provider,
+                        voice_id=tts_voice_id,
+                    )
 
             audio_url = public_url("/audio/reply.wav")
         elif reply.action == "radio":
@@ -4532,7 +4578,8 @@ def chat(
             storage.append_conversation("lulu", reply.display_text)
 
         sd_audio_cacheable = bool(audio_url and is_sd_reply_audio_cache_candidate(transcription, reply))
-        sd_audio_cache_key = sd_reply_audio_cache_key(reply) if sd_audio_cacheable else ""
+        reply_tts_mode = "story" if reply.action in {"story", "bible"} else "conversation"
+        sd_audio_cache_key = sd_reply_audio_cache_key(reply, reply_tts_mode) if sd_audio_cacheable else ""
 
         return JSONResponse(
             {
@@ -4543,6 +4590,9 @@ def chat(
                 "music_query": reply.music_query,
                 "audio_cacheable": sd_audio_cacheable,
                 "audio_cache_key": sd_audio_cache_key,
+                "tts_provider": tts_provider,
+                "tts_voice_id": tts_voice_id,
+                "tts_fallback_used": tts_fallback_used,
             }
         )
 
