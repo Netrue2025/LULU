@@ -3964,6 +3964,8 @@ def api_messages_readout() -> JSONResponse:
 def health() -> dict[str, str]:
     return {
         "status": "ok",
+        "deploy_marker": "tts-preview-no-fallback-2026-08-17",
+        "git_commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", ""),
         "data_dir": str(storage.DATA_DIR),
         "whisper_model": WHISPER_MODEL_NAME,
         "whisper_beam_size": str(WHISPER_BEAM_SIZE),
